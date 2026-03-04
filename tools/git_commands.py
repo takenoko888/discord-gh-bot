@@ -17,8 +17,16 @@ async def tool_run_gh(args_str: str) -> str:
     if args and args[0] in BLOCKED_SUBCOMMANDS:
         return f"gh {args[0]} は安全のため禁止されています。"
     try:
+        env = os.environ.copy()
+        # Ensure all token variants are set for gh copilot and other tools
+        token = GH_TOKEN or env.get("GITHUB_TOKEN") or env.get("COPILOT_GITHUB_TOKEN") or ""
+        if token:
+            env["GH_TOKEN"] = token
+            env["GITHUB_TOKEN"] = token
+            env["COPILOT_GITHUB_TOKEN"] = token
         proc = await asyncio.create_subprocess_exec(
-            "gh", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            "gh", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            env=env)
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=GH_TIMEOUT)
         output = stdout.decode("utf-8", errors="replace").strip()
         return output if output else "(出力なし)"
