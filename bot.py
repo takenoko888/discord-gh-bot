@@ -179,30 +179,25 @@ def truncate(text: str) -> str:
 @client.tree.command(name="gh", description="gh コマンドを実行します（例: repo list --limit 5）")
 @app_commands.describe(command="gh に渡す引数（例: repo list --limit 5）")
 async def gh_command(interaction: discord.Interaction, command: str):
-    # ① Permission check
+    await interaction.response.defer()
+
     allowed, debug = await has_allowed_role(interaction)
     if not allowed:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。\n`{debug}`",
-            ephemeral=True,
         )
         return
 
-    # ② Parse
     try:
         args = shlex.split(command)
     except ValueError as e:
-        await interaction.response.send_message(f"❌ コマンドの解析失敗: {e}", ephemeral=True)
+        await interaction.followup.send(f"❌ コマンドの解析失敗: {e}")
         return
 
-    # ③ Validate
     ok, reason = validate_args(args)
     if not ok:
-        await interaction.response.send_message(f"❌ {reason}", ephemeral=True)
+        await interaction.followup.send(f"❌ {reason}")
         return
-
-    # ④ Execute
-    await interaction.response.defer()
     try:
         output, returncode = await run_gh(args)
     except asyncio.TimeoutError:
@@ -234,26 +229,25 @@ async def gh_command(interaction: discord.Interaction, command: str):
 @client.tree.command(name="git", description="git コマンドを実行します（例: push origin main）")
 @app_commands.describe(command="git に渡す引数（例: push origin main）")
 async def git_command(interaction: discord.Interaction, command: str):
+    await interaction.response.defer()
+
     allowed, debug = await has_allowed_role(interaction)
     if not allowed:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。\n`{debug}`",
-            ephemeral=True,
         )
         return
 
     try:
         args = shlex.split(command)
     except ValueError as e:
-        await interaction.response.send_message(f"❌ コマンドの解析失敗: {e}", ephemeral=True)
+        await interaction.followup.send(f"❌ コマンドの解析失敗: {e}")
         return
 
     ok, reason = validate_git_args(args)
     if not ok:
-        await interaction.response.send_message(f"❌ {reason}", ephemeral=True)
+        await interaction.followup.send(f"❌ {reason}")
         return
-
-    await interaction.response.defer()
     try:
         output, returncode = await run_git(args)
     except asyncio.TimeoutError:
@@ -281,19 +275,18 @@ async def git_command(interaction: discord.Interaction, command: str):
 @client.tree.command(name="copilot", description="GitHub Copilot に質問します（AIと会話・コード生成）")
 @app_commands.describe(prompt="質問や依頼（例: PythonでHello Worldを書いて）")
 async def copilot_command(interaction: discord.Interaction, prompt: str):
+    await interaction.response.defer()
+
     allowed, debug = await has_allowed_role(interaction)
     if not allowed:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。\n`{debug}`",
-            ephemeral=True,
         )
         return
 
     if not prompt.strip():
-        await interaction.response.send_message("❌ 質問を入力してください。", ephemeral=True)
+        await interaction.followup.send("❌ 質問を入力してください。")
         return
-
-    await interaction.response.defer()
     output, returncode = await run_copilot(prompt.strip())
 
     success = returncode == 0
