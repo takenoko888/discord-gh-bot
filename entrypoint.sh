@@ -25,4 +25,7 @@ if [ ! -f "$COPILOT_BIN" ]; then
 fi
 
 echo "=== Starting bot ==="
+# Ensure token is available under all names the copilot binary checks
+export GITHUB_TOKEN="${GITHUB_TOKEN:-$GH_TOKEN}"
+export COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN:-$GH_TOKEN}"
 exec python bot.py
