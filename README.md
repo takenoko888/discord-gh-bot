@@ -1,4 +1,4 @@
-# Discord gh-bot — Koyeb対応
+# Discord gh-bot 
 
 Discord上で `gh` (GitHub CLI) コマンドを実行できるスラッシュコマンドBot。  
 **Koyeb** での常時稼働に対応しています。
@@ -7,7 +7,7 @@ Discord上で `gh` (GitHub CLI) コマンドを実行できるスラッシュコ
 
 - `/gh <引数>` — GitHub CLI コマンドを実行して結果をEmbedで返す
 - `/git <引数>` — git コマンドを実行（push, commit, clone など）
-- `/copilot <質問>` — GitHub Copilot に質問（AIと会話・コード生成）
+- `/copilot <質問>` — AIエージェント機能：自然言語を使用して指示を伝えることで、AIがGitHub操作やコード生成などを自動で実行
 - ロールベースの権限管理（`gh-bot` ロールのみ実行可）
 - `gh auth` / `gh config` は安全のためブロック
 - `git reset --hard` / `git push --force` / `git clean -fd` は安全のためブロック
