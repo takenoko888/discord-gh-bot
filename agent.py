@@ -304,6 +304,21 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Google検索でウェブを検索し、最新情報・ニュース・調査結果を取得する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "検索クエリ（例: Python 3.13 新機能）"},
+                    "num":   {"type": "integer", "description": "取得件数（1〜10、デフォルト5）", "default": 5},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -316,6 +331,7 @@ def _make_dispatch() -> dict:
     from tools.issues import tool_create_issue, tool_list_issues, tool_comment_issue, tool_close_issue
     from tools.prs import tool_create_pr, tool_list_prs, tool_get_pr_diff, tool_merge_pr
     from tools.git_commands import tool_run_gh, tool_run_git, tool_create_branch, tool_search_repo
+    from tools.search import tool_web_search
 
     return {
         "read_file":           lambda p: tool_read_file(p["repo"], p.get("path", "")),
@@ -336,6 +352,7 @@ def _make_dispatch() -> dict:
         "merge_pr":            lambda p: tool_merge_pr(p["repo"], p["pr_number"], p.get("merge_method", "merge")),
         "create_branch":       lambda p: tool_create_branch(p["repo"], p["branch_name"], p.get("from_branch", "main")),
         "push_multiple_files": lambda p: tool_push_multiple_files(p["repo"], p["files"], p["message"], p.get("branch", "main")),
+        "web_search":          lambda p: tool_web_search(p["query"], p.get("num", 5)),
     }
 
 

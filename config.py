@@ -9,6 +9,9 @@ DISCORD_TOKEN: str = os.environ["DISCORD_TOKEN"]
 GH_TOKEN: str = os.environ.get("GH_TOKEN", "")
 ALLOWED_ROLE_NAME: str = os.environ.get("ALLOWED_ROLE_NAME", "gh-bot")
 
+GOOGLE_API_KEY: str = os.environ.get("GOOGLE_API_KEY", "")
+GOOGLE_CSE_ID: str = os.environ.get("GOOGLE_CSE_ID", "")
+
 AVAILABLE_MODELS = [
     "gpt-4o", "gpt-4o-mini", "gpt-4.1",
     "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -42,6 +45,9 @@ SYSTEM_PROMPT = """\
 - 「このリポジトリのbot.pyを読んで改善して」→ read_file → 分析 → push_file
 - 「新しいPythonスクリプトを作ってGistに保存して」→ create_gist
 - 「リポジトリ一覧を見せて」→ run_gh
+
+- 「最新ニュースを調べて」→ web_search → 要約
+- 「○○について調べてまとめて」→ web_search → 結果を整理して報告
 
 作業が完了したら、結果をわかりやすく報告してください。
 コードを見せる場合は```で囲んでください。"""

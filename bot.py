@@ -13,6 +13,7 @@ Commands:
   /history                — Show conversation state
 """
 
+import asyncio
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -168,6 +169,58 @@ async def reset_command(interaction: discord.Interaction):
         return
     store.clear(interaction.channel_id)
     await interaction.followup.send("✅ 会話履歴をリセットしました。")
+
+
+@client.tree.command(name="remind", description="指定分後にメンションで通知")
+@app_commands.describe(minutes="何分後に通知するか", message="通知内容（例: PRのレビューをする）")
+async def remind_command(interaction: discord.Interaction, minutes: int, message: str):
+    await interaction.response.defer()
+    if minutes <= 0:
+        await interaction.followup.send("❌ 1分以上で指定してください。")
+        return
+    await interaction.followup.send(f"⏰ **{minutes}分後**に通知します！\n> {message}")
+
+    await asyncio.sleep(minutes * 60)
+
+    try:
+        await interaction.channel.send(
+            f"⏰ {interaction.user.mention} リマインダー！\n> {message}"
+        )
+    except Exception as e:
+        print(f"remind error: {e}")
+
+
+
+async def help_command(interaction: discord.Interaction):
+    await interaction.response.defer()
+    lines = [
+        "## 🤖 GitHub Copilot Bot — コマンド一覧\n",
+        "**`/copilot <指示>`**",
+        "　AIエージェントが自動でGitHub操作・コード生成・pushを行います。",
+        "　例: `takenoko888/my-repo のREADMEを改善してpushして`\n",
+        "**`/gh <command>`**",
+        "　gh CLIを直接実行します。",
+        "　例: `repo list --limit 5` / `issue list`\n",
+        "**`/git <command>`**",
+        "　git コマンドを直接実行します。",
+        "　例: `status` / `log --oneline -10`\n",
+        "**`/model <name>`**",
+        "　使用するAIモデルを切り替えます。\n",
+        "**`/reset`**",
+        "　このチャンネルの会話履歴をリセットします。\n",
+        "**`/history`**",
+        "　現在の会話状態（モデル・履歴数）を表示します。\n",
+        "**`/remind <分> <内容>`**",
+        "　指定した分数後にメンションで通知します。",
+        "　例: `30 PRのレビューをする`\n",
+        "**`/help`**",
+        "　このコマンド一覧を表示します。",
+    ]
+    embed = discord.Embed(
+        description="\n".join(lines),
+        color=discord.Color.blurple(),
+    )
+    await interaction.followup.send(embed=embed)
 
 
 @client.tree.command(name="history", description="会話状態を表示")
