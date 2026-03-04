@@ -1,16 +1,16 @@
 """
-Discord Bot — GitHub CLI + AI assistant with conversation memory.
+Discord Bot — AI Agent with full GitHub automation.
+
+The AI autonomously reads files, writes code, pushes to GitHub, runs commands,
+all from a single natural language instruction.
 
 Commands:
-  /gh <command>      — Run gh CLI commands
-  /git <command>     — Run git commands
-  /copilot <prompt>  — Chat with AI (remembers conversation per channel)
-  /create <prompt>   — AI generates code and pushes to GitHub
-  /model <name>      — Switch AI model
-  /reset             — Clear conversation history
-  /history           — Show conversation summary
-
-Deploy: Koyeb — set DISCORD_TOKEN, GH_TOKEN, ALLOWED_ROLE_NAME
+  /copilot <instruction>  — AI agent (auto-executes tools as needed)
+  /gh <command>           — Run gh CLI directly
+  /git <command>          — Run git CLI directly
+  /model <name>           — Switch AI model
+  /reset                  — Clear conversation history
+  /history                — Show conversation state
 """
 
 import os
@@ -44,29 +44,160 @@ DEFAULT_MODEL = os.environ.get("COPILOT_MODEL", "gpt-4o")
 
 BLOCKED_SUBCOMMANDS = {"auth", "config"}
 BLOCKED_GIT_PATTERNS = [
-    lambda args: args[0] == "reset" and "--hard" in args,
-    lambda args: args[0] == "push" and ("--force" in args or "-f" in args),
-    lambda args: args[0] == "clean" and ("-fd" in args or ("-f" in args and "-d" in args)),
+    lambda a: a[0] == "reset" and "--hard" in a,
+    lambda a: a[0] == "push" and ("--force" in a or "-f" in a),
+    lambda a: a[0] == "clean" and ("-fd" in a or ("-f" in a and "-d" in a)),
 ]
 
 MAX_OUTPUT_LENGTH = 1900
-MAX_HISTORY = 30  # max messages to remember per channel
-HISTORY_TTL = 3600  # seconds before auto-clearing idle conversations
+MAX_HISTORY = 30
+HISTORY_TTL = 3600
 GH_TIMEOUT = 30
 GIT_TIMEOUT = 60
-COPILOT_TIMEOUT = 90
+AGENT_TIMEOUT = 120
+MAX_TOOL_ROUNDS = 10
 MODELS_API_URL = "https://models.inference.ai.azure.com/chat/completions"
 GITHUB_API = "https://api.github.com"
 
-SYSTEM_PROMPT = (
-    "あなたはDiscord上で動作する優秀なプログラミングアシスタントです。日本語で回答してください。\n"
-    "ユーザーとの会話を覚えています。前の発言を踏まえて自然に会話してください。\n"
-    "コードを生成する場合は ```言語名 で囲んでください。\n"
-    "ユーザーが「GitHubに挙げて」「pushして」「Gistに保存して」などと言った場合は、"
-    "直前に生成したコードを対象として、以下のJSON行を回答の末尾に追加してください:\n"
-    '<!--PUSH:{"filename":"推奨ファイル名","description":"簡潔な説明"}-->\n'
-    "この指示タグは自動処理されるため、ユーザーに見せる必要はありません。"
-)
+SYSTEM_PROMPT = """\
+あなたはDiscord上で動作するAIエージェントです。日本語で回答してください。
+ユーザーの指示を達成するために、必要なツールを自分で判断して実行してください。
+複数のステップが必要な場合は、順番にツールを呼び出して自律的に作業を完了させてください。
+
+例:
+- 「このリポジトリのbot.pyを読んで改善して」→ read_file → 分析 → push_file
+- 「新しいPythonスクリプトを作ってGistに保存して」→ create_gist
+- 「リポジトリ一覧を見せて」→ run_gh
+
+作業が完了したら、結果をわかりやすく報告してください。
+コードを見せる場合は```で囲んでください。"""
+
+# ── Tool definitions (OpenAI function calling format) ──────────────────────────
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "GitHubリポジトリからファイルの内容を読み取る",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ（例: takenoko888/discord-gh-bot）"},
+                    "path": {"type": "string", "description": "ファイルパス（例: bot.py）"},
+                },
+                "required": ["repo", "path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "GitHubリポジトリのディレクトリ内のファイル一覧を取得する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ（例: takenoko888/discord-gh-bot）"},
+                    "path": {"type": "string", "description": "ディレクトリパス（ルートは空文字）", "default": ""},
+                },
+                "required": ["repo"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "push_file",
+            "description": "GitHubリポジトリにファイルを作成または更新する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ（例: takenoko888/discord-gh-bot）"},
+                    "path": {"type": "string", "description": "ファイルパス（例: hello.py）"},
+                    "content": {"type": "string", "description": "ファイルの内容"},
+                    "message": {"type": "string", "description": "コミットメッセージ"},
+                },
+                "required": ["repo", "path", "content", "message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_gist",
+            "description": "GitHub Gistを作成してURLを返す",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "ファイル名（例: calc.py）"},
+                    "content": {"type": "string", "description": "ファイルの内容"},
+                    "description": {"type": "string", "description": "Gistの説明"},
+                },
+                "required": ["filename", "content", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_repo",
+            "description": "新しいGitHubリポジトリを作成する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "リポジトリ名"},
+                    "description": {"type": "string", "description": "リポジトリの説明", "default": ""},
+                    "private": {"type": "boolean", "description": "プライベートにするか", "default": False},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_gh",
+            "description": "GitHub CLI (gh) コマンドを実行する。gh auth/config は禁止。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "args": {"type": "string", "description": "ghに渡す引数（例: repo list --limit 5）"},
+                },
+                "required": ["args"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_git",
+            "description": "gitコマンドを実行する。git reset --hard, push --force は禁止。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "args": {"type": "string", "description": "gitに渡す引数（例: status）"},
+                },
+                "required": ["args"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_repo",
+            "description": "GitHubリポジトリ内のコードを検索する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "検索クエリ"},
+                    "repo": {"type": "string", "description": "リポジトリ（例: takenoko888/discord-gh-bot）"},
+                },
+                "required": ["query", "repo"],
+            },
+        },
+    },
+]
 
 
 # ── Conversation store ─────────────────────────────────────────────────────────
@@ -75,42 +206,31 @@ class ConversationStore:
     def __init__(self):
         self._history: dict[int, list[dict]] = defaultdict(list)
         self._models: dict[int, str] = {}
-        self._last_code: dict[int, tuple[str, str]] = {}  # channel_id -> (code, filename)
         self._timestamps: dict[int, float] = {}
 
-    def get_model(self, channel_id: int) -> str:
-        return self._models.get(channel_id, DEFAULT_MODEL)
+    def get_model(self, ch: int) -> str:
+        return self._models.get(ch, DEFAULT_MODEL)
 
-    def set_model(self, channel_id: int, model: str):
-        self._models[channel_id] = model
+    def set_model(self, ch: int, model: str):
+        self._models[ch] = model
 
-    def add_message(self, channel_id: int, role: str, content: str):
-        self._history[channel_id].append({"role": role, "content": content})
-        if len(self._history[channel_id]) > MAX_HISTORY:
-            self._history[channel_id] = self._history[channel_id][-MAX_HISTORY:]
-        self._timestamps[channel_id] = time.time()
+    def add(self, ch: int, msg: dict):
+        self._history[ch].append(msg)
+        if len(self._history[ch]) > MAX_HISTORY:
+            self._history[ch] = self._history[ch][-MAX_HISTORY:]
+        self._timestamps[ch] = time.time()
 
-    def get_messages(self, channel_id: int) -> list[dict]:
-        if channel_id in self._timestamps:
-            if time.time() - self._timestamps[channel_id] > HISTORY_TTL:
-                self.clear(channel_id)
-        return [{"role": "system", "content": SYSTEM_PROMPT}] + self._history[channel_id]
+    def get_messages(self, ch: int) -> list[dict]:
+        if ch in self._timestamps and time.time() - self._timestamps[ch] > HISTORY_TTL:
+            self.clear(ch)
+        return [{"role": "system", "content": SYSTEM_PROMPT}] + self._history[ch]
 
-    def set_last_code(self, channel_id: int, code: str, filename: str):
-        self._last_code[channel_id] = (code, filename)
+    def clear(self, ch: int):
+        self._history.pop(ch, None)
+        self._timestamps.pop(ch, None)
 
-    def get_last_code(self, channel_id: int) -> tuple[str, str] | None:
-        return self._last_code.get(channel_id)
-
-    def clear(self, channel_id: int):
-        self._history.pop(channel_id, None)
-        self._last_code.pop(channel_id, None)
-        self._timestamps.pop(channel_id, None)
-
-    def summary(self, channel_id: int) -> str:
-        msgs = self._history.get(channel_id, [])
-        model = self.get_model(channel_id)
-        return f"モデル: `{model}` | 履歴: {len(msgs)} メッセージ"
+    def summary(self, ch: int) -> str:
+        return f"model: {self.get_model(ch)} | 履歴: {len(self._history.get(ch, []))}件"
 
 
 store = ConversationStore()
@@ -127,20 +247,250 @@ class GhBot(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()
-        print("Global slash commands synced.")
 
     async def on_ready(self):
         for guild in self.guilds:
             try:
                 self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
-                print(f"Guild commands synced: {guild.name} ({guild.id})")
+                print(f"Synced: {guild.name}")
             except Exception as e:
-                print(f"Failed to sync guild {guild.name}: {e}")
-        print(f"Logged in as {self.user}  (ID: {self.user.id})")
+                print(f"Sync failed {guild.name}: {e}")
+        print(f"Logged in as {self.user}")
 
 
 client = GhBot()
+
+
+# ── Tool implementations ──────────────────────────────────────────────────────
+
+async def _gh_api(method: str, endpoint: str, body: dict | None = None) -> dict:
+    headers = {"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json"}
+    async with aiohttp.ClientSession() as s:
+        if method == "GET":
+            async with s.get(f"{GITHUB_API}{endpoint}", headers=headers) as r:
+                return {"status": r.status, "data": await r.json()}
+        elif method == "PUT":
+            async with s.put(f"{GITHUB_API}{endpoint}", headers=headers, json=body) as r:
+                return {"status": r.status, "data": await r.json()}
+        elif method == "POST":
+            async with s.post(f"{GITHUB_API}{endpoint}", headers=headers, json=body) as r:
+                return {"status": r.status, "data": await r.json()}
+    return {"status": 500, "data": {"message": "Unknown method"}}
+
+
+async def tool_read_file(repo: str, path: str) -> str:
+    result = await _gh_api("GET", f"/repos/{repo}/contents/{path}")
+    if result["status"] != 200:
+        return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+    data = result["data"]
+    if isinstance(data, list):
+        return f"これはディレクトリです。list_filesを使ってください。"
+    content = base64.b64decode(data.get("content", "")).decode("utf-8", errors="replace")
+    return f"ファイル: {path} ({data.get('size', '?')} bytes)\n\n{content}"
+
+
+async def tool_list_files(repo: str, path: str = "") -> str:
+    endpoint = f"/repos/{repo}/contents/{path}" if path else f"/repos/{repo}/contents/"
+    result = await _gh_api("GET", endpoint)
+    if result["status"] != 200:
+        return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+    data = result["data"]
+    if not isinstance(data, list):
+        return f"これはファイルです: {data.get('name', '?')}"
+    lines = []
+    for item in data:
+        icon = "📁" if item["type"] == "dir" else "📄"
+        size = f" ({item.get('size', 0)}B)" if item["type"] == "file" else ""
+        lines.append(f"{icon} {item['path']}{size}")
+    return "\n".join(lines) if lines else "(空のディレクトリ)"
+
+
+async def tool_push_file(repo: str, path: str, content: str, message: str) -> str:
+    # Get existing sha if file exists
+    existing = await _gh_api("GET", f"/repos/{repo}/contents/{path}")
+    sha = existing["data"].get("sha") if existing["status"] == 200 else None
+
+    body = {"message": message, "content": base64.b64encode(content.encode()).decode("ascii")}
+    if sha:
+        body["sha"] = sha
+
+    result = await _gh_api("PUT", f"/repos/{repo}/contents/{path}", body)
+    if result["status"] in (200, 201):
+        url = result["data"].get("content", {}).get("html_url", f"https://github.com/{repo}")
+        action = "更新" if sha else "作成"
+        return f"✅ {path} を{action}しました: {url}"
+    return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+
+
+async def tool_create_gist(filename: str, content: str, description: str) -> str:
+    body = {"description": description, "public": True, "files": {filename: {"content": content}}}
+    result = await _gh_api("POST", "/gists", body)
+    if result["status"] == 201:
+        return f"✅ Gist作成: {result['data'].get('html_url', '')}"
+    return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+
+
+async def tool_create_repo(name: str, description: str = "", private: bool = False) -> str:
+    body = {"name": name, "description": description, "private": private, "auto_init": True}
+    result = await _gh_api("POST", "/user/repos", body)
+    if result["status"] == 201:
+        return f"✅ リポジトリ作成: {result['data'].get('html_url', '')}"
+    return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+
+
+async def tool_run_gh(args_str: str) -> str:
+    try:
+        args = shlex.split(args_str)
+    except ValueError as e:
+        return f"引数の解析エラー: {e}"
+    if args and args[0] in BLOCKED_SUBCOMMANDS:
+        return f"gh {args[0]} は安全のため禁止されています。"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "gh", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=GH_TIMEOUT)
+        output = stdout.decode("utf-8", errors="replace").strip()
+        return output if output else "(出力なし)"
+    except asyncio.TimeoutError:
+        return "タイムアウト"
+    except Exception as e:
+        return f"実行エラー: {e}"
+
+
+async def tool_run_git(args_str: str) -> str:
+    try:
+        args = shlex.split(args_str)
+    except ValueError as e:
+        return f"引数の解析エラー: {e}"
+    if args:
+        for pred in BLOCKED_GIT_PATTERNS:
+            if pred(args):
+                return f"git {' '.join(args)} は安全のため禁止されています。"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            cwd=os.environ.get("GIT_WORK_DIR", "."))
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=GIT_TIMEOUT)
+        output = stdout.decode("utf-8", errors="replace").strip()
+        return output if output else "(出力なし)"
+    except asyncio.TimeoutError:
+        return "タイムアウト"
+    except Exception as e:
+        return f"実行エラー: {e}"
+
+
+async def tool_search_repo(query: str, repo: str) -> str:
+    headers = {"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json"}
+    search_url = f"{GITHUB_API}/search/code?q={query}+repo:{repo}"
+    async with aiohttp.ClientSession() as s:
+        async with s.get(search_url, headers=headers) as r:
+            if r.status != 200:
+                data = await r.json()
+                return f"検索エラー ({r.status}): {data.get('message', '')}"
+            data = await r.json()
+            items = data.get("items", [])
+            if not items:
+                return f"「{query}」に一致する結果はありません。"
+            lines = [f"検索結果: {data.get('total_count', 0)}件"]
+            for item in items[:10]:
+                lines.append(f"📄 {item['path']} ({item.get('html_url', '')})")
+            return "\n".join(lines)
+
+
+TOOL_DISPATCH = {
+    "read_file": lambda p: tool_read_file(p["repo"], p.get("path", "")),
+    "list_files": lambda p: tool_list_files(p["repo"], p.get("path", "")),
+    "push_file": lambda p: tool_push_file(p["repo"], p["path"], p["content"], p["message"]),
+    "create_gist": lambda p: tool_create_gist(p["filename"], p["content"], p["description"]),
+    "create_repo": lambda p: tool_create_repo(p["name"], p.get("description", ""), p.get("private", False)),
+    "run_gh": lambda p: tool_run_gh(p["args"]),
+    "run_git": lambda p: tool_run_git(p["args"]),
+    "search_repo": lambda p: tool_search_repo(p["query"], p["repo"]),
+}
+
+
+# ── Agent loop ─────────────────────────────────────────────────────────────────
+
+async def agent_loop(ch: int, user_msg: str, progress_callback=None) -> str:
+    """Run the AI agent loop: call AI → execute tools → repeat until done."""
+    store.add(ch, {"role": "user", "content": user_msg})
+    model = store.get_model(ch)
+
+    tool_log = []
+
+    for round_num in range(MAX_TOOL_ROUNDS):
+        messages = store.get_messages(ch)
+
+        # Call AI with tools
+        headers = {"Authorization": f"Bearer {GH_TOKEN}", "Content-Type": "application/json"}
+        body = {"model": model, "messages": messages, "tools": TOOLS, "tool_choice": "auto"}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    MODELS_API_URL, headers=headers, json=body,
+                    timeout=aiohttp.ClientTimeout(total=AGENT_TIMEOUT),
+                ) as resp:
+                    data = await resp.json()
+                    if resp.status != 200:
+                        err = data.get("error", {}).get("message", json.dumps(data, ensure_ascii=False))
+                        return f"API エラー ({resp.status}): {err}"
+        except asyncio.TimeoutError:
+            return "タイムアウトしました。"
+        except Exception as e:
+            return f"リクエスト失敗: {e}"
+
+        choice = data["choices"][0]
+        msg = choice["message"]
+        finish_reason = choice.get("finish_reason", "")
+
+        # If no tool calls, we're done
+        tool_calls = msg.get("tool_calls")
+        if not tool_calls or finish_reason == "stop":
+            final = msg.get("content", "")
+            if final:
+                store.add(ch, {"role": "assistant", "content": final})
+            if tool_log:
+                log_text = "\n".join(tool_log)
+                return f"{final}\n\n---\n📋 **実行ログ:**\n{log_text}"
+            return final or "(応答なし)"
+
+        # Store assistant message with tool calls
+        store.add(ch, {"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
+
+        # Execute each tool call
+        for tc in tool_calls:
+            fn_name = tc["function"]["name"]
+            try:
+                fn_args = json.loads(tc["function"]["arguments"])
+            except json.JSONDecodeError:
+                fn_args = {}
+
+            # Progress update
+            args_summary = ", ".join(f"{k}={repr(v)[:40]}" for k, v in fn_args.items())
+            tool_log.append(f"🔧 `{fn_name}({args_summary})`")
+
+            if progress_callback:
+                await progress_callback(f"🔧 実行中: `{fn_name}` (ステップ {round_num + 1})")
+
+            # Execute
+            if fn_name in TOOL_DISPATCH:
+                try:
+                    result = await TOOL_DISPATCH[fn_name](fn_args)
+                    # Truncate very long results to avoid token limit
+                    if len(result) > 8000:
+                        result = result[:8000] + "\n…(結果を8000文字に省略)"
+                except Exception as e:
+                    result = f"ツール実行エラー: {e}"
+            else:
+                result = f"不明なツール: {fn_name}"
+
+            tool_log.append(f"  → {result[:100]}{'…' if len(result) > 100 else ''}")
+
+            store.add(ch, {"role": "tool", "tool_call_id": tc["id"], "content": result})
+
+    return "⚠️ 最大ステップ数に達しました。`/copilot 続けて` で継続できます。"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -155,372 +505,130 @@ async def has_allowed_role(interaction: discord.Interaction) -> tuple[bool, str]
     if member is None:
         return False, "member=None"
     role_names = [r.name for r in member.roles]
-    found = ALLOWED_ROLE_NAME in role_names
-    return found, f"roles={role_names}, looking_for='{ALLOWED_ROLE_NAME}'"
+    return ALLOWED_ROLE_NAME in role_names, f"roles={role_names}"
 
-
-def validate_args(args: list[str]) -> tuple[bool, str]:
-    if not args:
-        return False, "コマンドが空です。"
-    if args[0] in BLOCKED_SUBCOMMANDS:
-        return False, f"`gh {args[0]}` は安全のため禁止されています。"
-    return True, ""
-
-
-def validate_git_args(args: list[str]) -> tuple[bool, str]:
-    if not args:
-        return False, "コマンドが空です。"
-    for pred in BLOCKED_GIT_PATTERNS:
-        if pred(args):
-            return False, f"`git {' '.join(args)}` は安全のため禁止されています。"
-    return True, ""
-
-
-async def run_command(program: str, args: list[str], timeout: int, cwd: str | None = None) -> tuple[str, int]:
-    proc = await asyncio.create_subprocess_exec(
-        program, *args,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd=cwd,
-    )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    return stdout.decode("utf-8", errors="replace").strip(), proc.returncode
-
-
-def truncate(text: str, limit: int = MAX_OUTPUT_LENGTH) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "\n…(省略)"
-
-
-def extract_code_blocks(text: str) -> list[tuple[str, str]]:
-    """Extract (language, code) pairs from markdown code blocks."""
-    pattern = r"```(\w*)\n(.*?)```"
-    return re.findall(pattern, text, re.DOTALL)
-
-
-def extract_push_directive(text: str) -> dict | None:
-    match = re.search(r"<!--PUSH:(.*?)-->", text)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except json.JSONDecodeError:
-            pass
-    return None
-
-
-def clean_response(text: str) -> str:
-    return re.sub(r"<!--PUSH:.*?-->", "", text).strip()
-
-
-# ── AI API call ────────────────────────────────────────────────────────────────
-
-async def call_ai(messages: list[dict], model: str) -> tuple[str, int]:
-    if not GH_TOKEN:
-        return "GH_TOKEN が設定されていません。", 1
-
-    headers = {"Authorization": f"Bearer {GH_TOKEN}", "Content-Type": "application/json"}
-    body = {"model": model, "messages": messages}
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                MODELS_API_URL, headers=headers, json=body,
-                timeout=aiohttp.ClientTimeout(total=COPILOT_TIMEOUT),
-            ) as resp:
-                data = await resp.json()
-                if resp.status == 200:
-                    return data["choices"][0]["message"]["content"], 0
-                error_msg = data.get("error", {}).get("message", json.dumps(data, ensure_ascii=False))
-                return f"API エラー ({resp.status}): {error_msg}", 1
-    except asyncio.TimeoutError:
-        return "タイムアウトしました。", 1
-    except Exception as e:
-        return f"リクエスト失敗: {e}", 1
-
-
-# ── GitHub helpers ─────────────────────────────────────────────────────────────
-
-async def push_to_github(repo: str, filepath: str, content: str, message: str) -> str:
-    url = f"{GITHUB_API}/repos/{repo}/contents/{filepath}"
-    headers = {"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json"}
-
-    sha = None
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as resp:
-            if resp.status == 200:
-                sha = (await resp.json()).get("sha")
-
-        body = {"message": message, "content": base64.b64encode(content.encode()).decode("ascii")}
-        if sha:
-            body["sha"] = sha
-
-        async with session.put(url, headers=headers, json=body) as resp:
-            data = await resp.json()
-            if resp.status in (200, 201):
-                return data.get("content", {}).get("html_url", f"https://github.com/{repo}")
-            raise RuntimeError(f"GitHub API エラー ({resp.status}): {data.get('message', data)}")
-
-
-async def create_gist(filename: str, content: str, description: str) -> str:
-    url = f"{GITHUB_API}/gists"
-    headers = {"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json"}
-    body = {"description": description, "public": True, "files": {filename: {"content": content}}}
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=body) as resp:
-            data = await resp.json()
-            if resp.status == 201:
-                return data.get("html_url", "")
-            raise RuntimeError(f"Gist 作成失敗 ({resp.status}): {data.get('message', data)}")
-
-
-# ── Permission check decorator ─────────────────────────────────────────────────
 
 async def check_role(interaction: discord.Interaction) -> bool:
     allowed, debug = await has_allowed_role(interaction)
     if not allowed:
-        await interaction.followup.send(
-            f"❌ **{ALLOWED_ROLE_NAME}** ロールが必要です。\n`{debug}`")
+        await interaction.followup.send(f"❌ **{ALLOWED_ROLE_NAME}** ロールが必要です。\n`{debug}`")
     return allowed
+
+
+def truncate(text: str, limit: int = MAX_OUTPUT_LENGTH) -> str:
+    return text if len(text) <= limit else text[:limit] + "\n…(省略)"
 
 
 # ── Slash commands ─────────────────────────────────────────────────────────────
 
-@client.tree.command(name="gh", description="gh コマンドを実行します")
-@app_commands.describe(command="gh に渡す引数（例: repo list --limit 5）")
-async def gh_command(interaction: discord.Interaction, command: str):
-    await interaction.response.defer()
-    if not await check_role(interaction):
-        return
-
-    try:
-        args = shlex.split(command)
-    except ValueError as e:
-        await interaction.followup.send(f"❌ 解析失敗: {e}")
-        return
-
-    ok, reason = validate_args(args)
-    if not ok:
-        await interaction.followup.send(f"❌ {reason}")
-        return
-
-    try:
-        output, rc = await run_command("gh", args, GH_TIMEOUT)
-    except asyncio.TimeoutError:
-        await interaction.followup.send(f"❌ タイムアウト（{GH_TIMEOUT}秒）")
-        return
-    except Exception as e:
-        await interaction.followup.send(f"❌ エラー: {e}")
-        return
-
-    embed = discord.Embed(
-        title=f"{'✅' if rc == 0 else '❌'}  gh {command}",
-        description=f"```\n{truncate(output) if output else '(出力なし)'}\n```",
-        color=discord.Color.green() if rc == 0 else discord.Color.red(),
-    )
-    embed.set_footer(text=f"実行者: {interaction.user}")
-    await interaction.followup.send(embed=embed)
-
-
-@client.tree.command(name="git", description="git コマンドを実行します")
-@app_commands.describe(command="git に渡す引数（例: status）")
-async def git_command(interaction: discord.Interaction, command: str):
-    await interaction.response.defer()
-    if not await check_role(interaction):
-        return
-
-    try:
-        args = shlex.split(command)
-    except ValueError as e:
-        await interaction.followup.send(f"❌ 解析失敗: {e}")
-        return
-
-    ok, reason = validate_git_args(args)
-    if not ok:
-        await interaction.followup.send(f"❌ {reason}")
-        return
-
-    try:
-        output, rc = await run_command("git", args, GIT_TIMEOUT, cwd=os.environ.get("GIT_WORK_DIR", "."))
-    except asyncio.TimeoutError:
-        await interaction.followup.send(f"❌ タイムアウト（{GIT_TIMEOUT}秒）")
-        return
-    except Exception as e:
-        await interaction.followup.send(f"❌ エラー: {e}")
-        return
-
-    embed = discord.Embed(
-        title=f"{'✅' if rc == 0 else '❌'}  git {command}",
-        description=f"```\n{truncate(output) if output else '(出力なし)'}\n```",
-        color=discord.Color.green() if rc == 0 else discord.Color.red(),
-    )
-    embed.set_footer(text=f"実行者: {interaction.user}")
-    await interaction.followup.send(embed=embed)
-
-
-@client.tree.command(name="copilot", description="AIと会話します（会話を記憶します）")
-@app_commands.describe(prompt="メッセージ（例: Pythonでソート関数を書いて）")
+@client.tree.command(name="copilot", description="AIエージェント — 指示1つで自動実行（GitHub読み書き・コード生成・push）")
+@app_commands.describe(prompt="指示（例: takenoko888/discord-gh-botのbot.pyを読んで改善してpushして）")
 async def copilot_command(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
     if not await check_role(interaction):
         return
 
     ch = interaction.channel_id
-    model = store.get_model(ch)
 
-    store.add_message(ch, "user", prompt)
-    messages = store.get_messages(ch)
-    output, rc = await call_ai(messages, model)
-
-    if rc != 0:
-        store._history[ch].pop()  # remove failed user message
-        await interaction.followup.send(f"❌ {output}")
-        return
-
-    store.add_message(ch, "assistant", output)
-
-    # Extract code blocks and remember the last one
-    code_blocks = extract_code_blocks(output)
-    if code_blocks:
-        lang, code = code_blocks[-1]
-        ext_map = {"python": ".py", "javascript": ".js", "typescript": ".ts", "java": ".java",
-                   "go": ".go", "rust": ".rs", "html": ".html", "css": ".css", "sh": ".sh", "bash": ".sh"}
-        ext = ext_map.get(lang.lower(), ".txt")
-        store.set_last_code(ch, code.strip(), f"code{ext}")
-
-    # Check if AI wants to push
-    push_directive = extract_push_directive(output)
-    display = clean_response(output)
-
-    # Auto-push if directive found
-    push_msg = ""
-    if push_directive and store.get_last_code(ch):
-        code_to_push, default_fn = store.get_last_code(ch)
-        fn = push_directive.get("filename", default_fn)
-        desc = push_directive.get("description", prompt[:80])
+    async def progress(msg):
         try:
-            gist_url = await create_gist(fn, code_to_push, desc)
-            push_msg = f"\n\n✅ **GitHub に保存しました:** {gist_url}"
-        except Exception as e:
-            push_msg = f"\n\n⚠️ Push 失敗: {e}"
+            await interaction.edit_original_response(content=msg)
+        except Exception:
+            pass
 
-    display_text = truncate(display + push_msg, 4000)
+    await progress("🤔 考え中...")
 
-    embed = discord.Embed(description=display_text, color=discord.Color.blue())
-    embed.set_footer(text=f"model: {model} | {store.summary(ch)} | 実行者: {interaction.user}")
-    await interaction.followup.send(embed=embed)
+    result = await agent_loop(ch, prompt, progress_callback=progress)
+
+    # Split long responses into multiple messages
+    if len(result) <= 4000:
+        embed = discord.Embed(description=result, color=discord.Color.blue())
+        embed.set_footer(text=f"{store.summary(ch)} | 実行者: {interaction.user}")
+        await interaction.edit_original_response(content=None, embed=embed)
+    else:
+        # Send as multiple messages for very long responses
+        chunks = [result[i:i+1900] for i in range(0, len(result), 1900)]
+        await interaction.edit_original_response(content=chunks[0])
+        for chunk in chunks[1:]:
+            await interaction.followup.send(chunk)
 
 
-@client.tree.command(name="create", description="AIがコードを生成してGitHubにpush")
-@app_commands.describe(
-    prompt="どんなコードを作るか",
-    filename="ファイル名（省略可）",
-    repo="pushするリポジトリ（省略時はGist）",
-)
-async def create_command(interaction: discord.Interaction, prompt: str, filename: str = "", repo: str = ""):
+@client.tree.command(name="gh", description="gh コマンドを直接実行")
+@app_commands.describe(command="引数（例: repo list --limit 5）")
+async def gh_command(interaction: discord.Interaction, command: str):
     await interaction.response.defer()
     if not await check_role(interaction):
         return
-    if not GH_TOKEN:
-        await interaction.followup.send("❌ GH_TOKEN が設定されていません。")
-        return
-
-    ch = interaction.channel_id
-    model = store.get_model(ch)
-
-    gen_prompt = (
-        f"以下の依頼に基づいてコードを生成してください。コードのみ返してください（説明不要）。\n\n{prompt}"
-    )
-    messages = [
-        {"role": "system", "content": "あなたはコード生成専門のアシスタントです。コードのみをmarkdownコードブロックで返してください。"},
-        {"role": "user", "content": gen_prompt},
-    ]
-    output, rc = await call_ai(messages, model)
-    if rc != 0:
-        await interaction.followup.send(f"❌ コード生成失敗: {output}")
-        return
-
-    # Extract code
-    code_blocks = extract_code_blocks(output)
-    if code_blocks:
-        lang, code = code_blocks[0]
-        ext_map = {"python": ".py", "javascript": ".js", "typescript": ".ts", "java": ".java",
-                   "go": ".go", "rust": ".rs", "html": ".html", "css": ".css", "sh": ".sh"}
-        ext = ext_map.get(lang.lower(), ".txt")
-        final_filename = filename or f"generated{ext}"
-        code = code.strip()
-    else:
-        code = output.strip()
-        final_filename = filename or "generated.txt"
-
-    # Push
-    try:
-        if repo:
-            url = await push_to_github(repo, final_filename, code, f"Add {final_filename}: {prompt[:50]}")
-            target = f"📁 `{repo}`"
-        else:
-            url = await create_gist(final_filename, code, prompt[:100])
-            target = "📝 Gist"
-    except Exception as e:
-        embed = discord.Embed(
-            title="⚠️ コード生成OK / Push失敗",
-            description=f"**エラー:** {e}\n\n```\n{truncate(code)}\n```",
-            color=discord.Color.orange(),
-        )
-        await interaction.followup.send(embed=embed)
-        return
-
-    store.set_last_code(ch, code, final_filename)
-
+    output = await tool_run_gh(command)
     embed = discord.Embed(
-        title=f"✅ {final_filename}",
-        description=f"**依頼:** {prompt[:100]}\n{target} → {url}\n\n```\n{truncate(code, 1200)}\n```",
+        title=f"gh {command}",
+        description=f"```\n{truncate(output)}\n```",
         color=discord.Color.green(),
     )
-    embed.set_footer(text=f"model: {model} | 実行者: {interaction.user}")
     await interaction.followup.send(embed=embed)
 
 
-@client.tree.command(name="model", description="AIモデルを切り替えます")
+@client.tree.command(name="git", description="git コマンドを直接実行")
+@app_commands.describe(command="引数（例: status）")
+async def git_command(interaction: discord.Interaction, command: str):
+    await interaction.response.defer()
+    if not await check_role(interaction):
+        return
+    output = await tool_run_git(command)
+    embed = discord.Embed(
+        title=f"git {command}",
+        description=f"```\n{truncate(output)}\n```",
+        color=discord.Color.green(),
+    )
+    await interaction.followup.send(embed=embed)
+
+
+@client.tree.command(name="model", description="AIモデルを切り替え")
 @app_commands.describe(name="モデル名")
 @app_commands.choices(name=[app_commands.Choice(name=m, value=m) for m in AVAILABLE_MODELS])
 async def model_command(interaction: discord.Interaction, name: app_commands.Choice[str]):
     await interaction.response.defer()
     if not await check_role(interaction):
         return
-
     ch = interaction.channel_id
     old = store.get_model(ch)
     store.set_model(ch, name.value)
-    await interaction.followup.send(f"✅ モデルを変更: `{old}` → `{name.value}`")
+    await interaction.followup.send(f"✅ モデル変更: `{old}` → `{name.value}`")
 
 
-@client.tree.command(name="reset", description="会話履歴をリセットします")
+@client.tree.command(name="reset", description="会話履歴をリセット")
 async def reset_command(interaction: discord.Interaction):
     await interaction.response.defer()
     if not await check_role(interaction):
         return
-
     store.clear(interaction.channel_id)
     await interaction.followup.send("✅ 会話履歴をリセットしました。")
 
 
-@client.tree.command(name="history", description="現在の会話状態を表示します")
+@client.tree.command(name="history", description="会話状態を表示")
 async def history_command(interaction: discord.Interaction):
     await interaction.response.defer()
     ch = interaction.channel_id
     msgs = store._history.get(ch, [])
     model = store.get_model(ch)
-    last_code = store.get_last_code(ch)
 
-    lines = [f"**モデル:** `{model}`", f"**履歴:** {len(msgs)} メッセージ（最大 {MAX_HISTORY}）"]
-    if last_code:
-        lines.append(f"**最後のコード:** `{last_code[1]}` ({len(last_code[0])} 文字)")
+    lines = [f"**モデル:** `{model}`", f"**履歴:** {len(msgs)}/{MAX_HISTORY} メッセージ"]
+
+    user_msgs = [m for m in msgs if m.get("role") == "user"]
+    tool_msgs = [m for m in msgs if m.get("role") == "tool"]
+    lines.append(f"**ユーザー発言:** {len(user_msgs)} | **ツール実行:** {len(tool_msgs)}")
+
     if msgs:
-        lines.append("\n**直近のやりとり:**")
+        lines.append("\n**直近:**")
         for m in msgs[-6:]:
-            role = "👤" if m["role"] == "user" else "🤖"
-            content = m["content"][:80] + ("…" if len(m["content"]) > 80 else "")
-            lines.append(f"{role} {content}")
+            role = m.get("role", "?")
+            icons = {"user": "👤", "assistant": "🤖", "tool": "🔧", "system": "⚙️"}
+            icon = icons.get(role, "❓")
+            content = m.get("content", "")[:80]
+            if m.get("tool_calls"):
+                names = [tc["function"]["name"] for tc in m["tool_calls"]]
+                content = f"ツール呼出: {', '.join(names)}"
+            lines.append(f"{icon} {content}")
 
     embed = discord.Embed(description="\n".join(lines), color=discord.Color.greyple())
     await interaction.followup.send(embed=embed)
@@ -533,21 +641,14 @@ class _HealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
-
-    def log_message(self, *args):
+    def log_message(self, *a):
         pass
-
 
 def _start_health_server():
     port = int(os.environ.get("PORT", 8000))
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
-    print(f"Health check server listening on port {port}")
-    server.serve_forever()
+    HTTPServer(("0.0.0.0", port), _HealthHandler).serve_forever()
 
-
-# ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    t = threading.Thread(target=_start_health_server, daemon=True)
-    t.start()
+    threading.Thread(target=_start_health_server, daemon=True).start()
     client.run(DISCORD_TOKEN)
