@@ -13,9 +13,9 @@ GOOGLE_API_KEY: str = os.environ.get("GOOGLE_API_KEY", "")
 GOOGLE_CSE_ID: str = os.environ.get("GOOGLE_CSE_ID", "")
 
 AVAILABLE_MODELS = [
-    "gpt-4o", "gpt-4o-mini", "gpt-4.1",
-    "claude-sonnet-4.6", "claude-haiku-4.5",
-    "Mistral-large-2411",
+    "gpt-4o", "GPT-5.3-Codex", "Gemini 3 Pro (Preview)",
+    "claude sonnet 4.6", "claude haiku 4.5",
+    "Claude Opus 4.6",
 ]
 DEFAULT_MODEL = os.environ.get("COPILOT_MODEL", "gpt-4o")
 
