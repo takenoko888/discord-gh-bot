@@ -65,11 +65,25 @@ client = GhBot()
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def has_allowed_role(interaction: discord.Interaction) -> bool:
+async def has_allowed_role(interaction: discord.Interaction) -> tuple[bool, str]:
+    """Returns (allowed, debug_info)."""
     member = interaction.user if isinstance(interaction.user, discord.Member) else interaction.member
+
+    # If member data is missing, try fetching from the guild
+    if member is None and interaction.guild is not None:
+        try:
+            member = await interaction.guild.fetch_member(interaction.user.id)
+        except Exception:
+            pass
+
     if member is None:
-        return False
-    return any(r.name == ALLOWED_ROLE_NAME for r in member.roles)
+        return False, "member=None"
+
+    role_names = [r.name for r in member.roles]
+    found = ALLOWED_ROLE_NAME in role_names
+    debug = f"user={member}, roles={role_names}, looking_for='{ALLOWED_ROLE_NAME}'"
+    print(debug)
+    return found, debug
 
 
 def validate_args(args: list[str]) -> tuple[bool, str]:
@@ -135,9 +149,10 @@ def truncate(text: str) -> str:
 @app_commands.describe(command="gh に渡す引数（例: repo list --limit 5）")
 async def gh_command(interaction: discord.Interaction, command: str):
     # ① Permission check
-    if not has_allowed_role(interaction):
+    allowed, debug = await has_allowed_role(interaction)
+    if not allowed:
         await interaction.response.send_message(
-            f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。",
+            f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。\n`{debug}`",
             ephemeral=True,
         )
         return
@@ -188,9 +203,10 @@ async def gh_command(interaction: discord.Interaction, command: str):
 @client.tree.command(name="git", description="git コマンドを実行します（例: push origin main）")
 @app_commands.describe(command="git に渡す引数（例: push origin main）")
 async def git_command(interaction: discord.Interaction, command: str):
-    if not has_allowed_role(interaction):
+    allowed, debug = await has_allowed_role(interaction)
+    if not allowed:
         await interaction.response.send_message(
-            f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。",
+            f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。\n`{debug}`",
             ephemeral=True,
         )
         return
@@ -234,9 +250,10 @@ async def git_command(interaction: discord.Interaction, command: str):
 @client.tree.command(name="copilot", description="GitHub Copilot に質問します（AIと会話・コード生成）")
 @app_commands.describe(prompt="質問や依頼（例: PythonでHello Worldを書いて）")
 async def copilot_command(interaction: discord.Interaction, prompt: str):
-    if not has_allowed_role(interaction):
+    allowed, debug = await has_allowed_role(interaction)
+    if not allowed:
         await interaction.response.send_message(
-            f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。",
+            f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。\n`{debug}`",
             ephemeral=True,
         )
         return
