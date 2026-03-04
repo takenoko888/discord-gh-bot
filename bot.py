@@ -48,6 +48,7 @@ COPILOT_TIMEOUT = 90  # Copilot can take a while
 class GhBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
+        intents.members = True  # ロール判定に必要
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 
@@ -65,9 +66,10 @@ client = GhBot()
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def has_allowed_role(interaction: discord.Interaction) -> bool:
-    if isinstance(interaction.user, discord.Member):
-        return any(r.name == ALLOWED_ROLE_NAME for r in interaction.user.roles)
-    return False
+    member = interaction.user if isinstance(interaction.user, discord.Member) else interaction.member
+    if member is None:
+        return False
+    return any(r.name == ALLOWED_ROLE_NAME for r in member.roles)
 
 
 def validate_args(args: list[str]) -> tuple[bool, str]:
