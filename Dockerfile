@@ -15,6 +15,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY bot.py .
+COPY config.py .
+COPY store.py .
+COPY agent.py .
+COPY tools/ tools/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
