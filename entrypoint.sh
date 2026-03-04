@@ -1,63 +1,28 @@
 #!/bin/bash
 
-# Install gh-copilot extension manually (gh extension install fails due to built-in name conflict)
-EXT_DIR="$HOME/.local/share/gh/extensions/gh-copilot"
+# Install GitHub Copilot CLI (required for gh copilot command)
+# gh copilot looks for 'copilot' binary in PATH or ~/.local/share/gh/copilot/copilot
+COPILOT_DIR="$HOME/.local/share/gh/copilot"
+COPILOT_BIN="$COPILOT_DIR/copilot"
 
-install_copilot() {
-    rm -rf "$EXT_DIR"
-    mkdir -p "$EXT_DIR"
+if [ ! -f "$COPILOT_BIN" ]; then
+    echo "=== Installing GitHub Copilot CLI ==="
+    mkdir -p "$COPILOT_DIR"
     ARCH=$(uname -m)
-    [ "$ARCH" = "aarch64" ] && ARCH_NAME="arm64" || ARCH_NAME="amd64"
-
-    RELEASE_JSON=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-        "https://api.github.com/repos/github/gh-copilot/releases/latest")
-
-    ASSET_NAME=$(echo "$RELEASE_JSON" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for asset in data.get('assets', []):
-    n = asset['name'].lower()
-    if 'linux' in n and '$ARCH_NAME' in n:
-        print(asset['name']); break
-" 2>/dev/null)
-
-    DOWNLOAD_URL=$(echo "$RELEASE_JSON" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for asset in data.get('assets', []):
-    n = asset['name'].lower()
-    if 'linux' in n and '$ARCH_NAME' in n:
-        print(asset['browser_download_url']); break
-" 2>/dev/null)
-
-    echo "Asset: $ASSET_NAME  URL: $DOWNLOAD_URL"
-
-    if [ -z "$DOWNLOAD_URL" ]; then
-        echo "⚠️ No release found. API: $(echo "$RELEASE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message',''))" 2>/dev/null)"
-        return 1
-    fi
-
+    [ "$ARCH" = "aarch64" ] && ARCH_NAME="arm64" || ARCH_NAME="x64"
+    ARCHIVE_URL="https://github.com/github/copilot-cli/releases/latest/download/copilot-linux-${ARCH_NAME}.tar.gz"
+    echo "Downloading: $ARCHIVE_URL"
     TMPFILE=$(mktemp)
-    curl -sL -H "Authorization: Bearer $GH_TOKEN" "$DOWNLOAD_URL" -o "$TMPFILE"
-
-    if echo "$ASSET_NAME" | grep -q "\.tar\.gz$"; then
-        tar -xzf "$TMPFILE" -C "$EXT_DIR"
-        # Move the extracted binary to the expected name
-        BIN=$(find "$EXT_DIR" -maxdepth 2 -type f -executable | head -1)
-        [ -n "$BIN" ] && mv "$BIN" "$EXT_DIR/gh-copilot" 2>/dev/null || true
+    if curl -sL "$ARCHIVE_URL" -o "$TMPFILE" && [ -s "$TMPFILE" ]; then
+        tar -xzf "$TMPFILE" -C "$COPILOT_DIR"
+        rm -f "$TMPFILE"
+        chmod +x "$COPILOT_BIN" 2>/dev/null || true
+        [ -f "$COPILOT_BIN" ] && echo "✅ Copilot CLI installed" || { echo "⚠️ Binary not found, contents:"; ls "$COPILOT_DIR"; }
     else
-        mv "$TMPFILE" "$EXT_DIR/gh-copilot"
+        echo "⚠️ Download failed (status: $?)"
+        rm -f "$TMPFILE"
     fi
-    rm -f "$TMPFILE"
-    chmod +x "$EXT_DIR/gh-copilot"
-    echo "File type: $(file "$EXT_DIR/gh-copilot" | cut -d: -f2)"
-}
-
-if ! "$EXT_DIR/gh-copilot" --version >/dev/null 2>&1; then
-    echo "=== Installing gh-copilot extension ==="
-    install_copilot && echo "✅ gh-copilot installed" || echo "⚠️ gh-copilot install failed"
 fi
 
-# Always start the bot (gh uses GH_TOKEN env var for auth automatically)
 echo "=== Starting bot ==="
 exec python bot.py
