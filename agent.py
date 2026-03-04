@@ -366,7 +366,12 @@ async def agent_loop(ch: int, user_msg: str, store: ConversationStore, progress_
     for round_num in range(MAX_TOOL_ROUNDS):
         messages = store.get_messages(ch)
 
-        headers = {"Authorization": f"Bearer {GH_TOKEN}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {GH_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
         body = {"model": model, "messages": messages, "tools": TOOLS, "tool_choice": "auto"}
 
         try:
@@ -375,7 +380,12 @@ async def agent_loop(ch: int, user_msg: str, store: ConversationStore, progress_
                     MODELS_API_URL, headers=headers, json=body,
                     timeout=aiohttp.ClientTimeout(total=AGENT_TIMEOUT),
                 ) as resp:
-                    data = await resp.json()
+                    content_type = resp.content_type or ""
+                    if "json" in content_type:
+                        data = await resp.json()
+                    else:
+                        raw = await resp.text()
+                        return f"API エラー ({resp.status}): {raw[:300]}"
                     if resp.status != 200:
                         err = data.get("error", {}).get("message", json.dumps(data, ensure_ascii=False))
                         return f"API エラー ({resp.status}): {err}"
