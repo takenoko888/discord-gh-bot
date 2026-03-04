@@ -301,6 +301,184 @@ async def copilot_command(interaction: discord.Interaction, prompt: str):
     await interaction.followup.send(embed=embed)
 
 
+GITHUB_API = "https://api.github.com"
+
+
+async def generate_code(prompt: str) -> tuple[str, str]:
+    """Ask AI to generate code. Returns (code, explanation)."""
+    system_msg = (
+        "あなたはコード生成専門のアシスタントです。"
+        "ユーザーの依頼に基づいてコードを生成してください。"
+        "回答は以下のJSON形式で返してください（他の文章は不要）:\n"
+        '{"code": "生成したコード", "explanation": "コードの説明（日本語）", "filename": "推奨ファイル名"}'
+    )
+    headers = {
+        "Authorization": f"Bearer {GH_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": COPILOT_MODEL,
+        "messages": [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": prompt},
+        ],
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            MODELS_API_URL, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=COPILOT_TIMEOUT)
+        ) as resp:
+            data = await resp.json()
+            if resp.status != 200:
+                error_msg = data.get("error", {}).get("message", str(data))
+                raise RuntimeError(f"API エラー ({resp.status}): {error_msg}")
+            raw = data["choices"][0]["message"]["content"]
+            # Strip markdown code fences if present
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                first_newline = cleaned.index("\n")
+                cleaned = cleaned[first_newline + 1:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            return cleaned.strip(), raw
+
+
+async def push_to_github(repo: str, filepath: str, content: str, message: str) -> str:
+    """Create or update a file in a GitHub repo via the Contents API. Returns the HTML URL."""
+    import base64
+    url = f"{GITHUB_API}/repos/{repo}/contents/{filepath}"
+    headers = {
+        "Authorization": f"Bearer {GH_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    # Check if file already exists (to get its sha for update)
+    sha = None
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            if resp.status == 200:
+                existing = await resp.json()
+                sha = existing.get("sha")
+
+        body = {
+            "message": message,
+            "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+        }
+        if sha:
+            body["sha"] = sha
+
+        async with session.put(url, headers=headers, json=body) as resp:
+            data = await resp.json()
+            if resp.status in (200, 201):
+                return data.get("content", {}).get("html_url", f"https://github.com/{repo}")
+            else:
+                error_msg = data.get("message", str(data))
+                raise RuntimeError(f"GitHub API エラー ({resp.status}): {error_msg}")
+
+
+async def create_gist(filename: str, content: str, description: str) -> str:
+    """Create a GitHub Gist. Returns the HTML URL."""
+    url = f"{GITHUB_API}/gists"
+    headers = {
+        "Authorization": f"Bearer {GH_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+    body = {
+        "description": description,
+        "public": True,
+        "files": {filename: {"content": content}},
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=body) as resp:
+            data = await resp.json()
+            if resp.status == 201:
+                return data.get("html_url", "")
+            else:
+                error_msg = data.get("message", str(data))
+                raise RuntimeError(f"Gist 作成失敗 ({resp.status}): {error_msg}")
+
+
+@client.tree.command(name="create", description="AIにコードを生成させてGitHubに自動push（Gist or リポジトリ）")
+@app_commands.describe(
+    prompt="どんなコードを作るか（例: Pythonで電卓アプリを作って）",
+    filename="ファイル名（例: calc.py）省略時はAIが決定",
+    repo="pushするリポジトリ（例: takenoko888/my-app）省略時はGistに作成",
+)
+async def create_command(
+    interaction: discord.Interaction,
+    prompt: str,
+    filename: str = "",
+    repo: str = "",
+):
+    await interaction.response.defer()
+
+    allowed, debug = await has_allowed_role(interaction)
+    if not allowed:
+        await interaction.followup.send(
+            f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。\n`{debug}`",
+        )
+        return
+
+    if not GH_TOKEN:
+        await interaction.followup.send("❌ GH_TOKEN が設定されていません。")
+        return
+
+    # Step 1: Generate code
+    try:
+        raw_response, _ = await generate_code(prompt)
+    except Exception as e:
+        await interaction.followup.send(f"❌ コード生成に失敗: {e}")
+        return
+
+    # Parse JSON response from AI
+    code = raw_response
+    explanation = ""
+    ai_filename = "main.py"
+    try:
+        parsed = json.loads(raw_response)
+        code = parsed.get("code", raw_response)
+        explanation = parsed.get("explanation", "")
+        ai_filename = parsed.get("filename", "main.py")
+    except json.JSONDecodeError:
+        pass
+
+    final_filename = filename or ai_filename
+
+    # Step 2: Push to GitHub
+    try:
+        if repo:
+            url = await push_to_github(repo, final_filename, code, f"Add {final_filename}: {prompt[:50]}")
+            target = f"📁 リポジトリ: `{repo}`"
+        else:
+            url = await create_gist(final_filename, code, prompt[:100])
+            target = "📝 Gist"
+    except Exception as e:
+        # Push failed, still show the generated code
+        embed = discord.Embed(
+            title="⚠️ コード生成成功 / Push失敗",
+            description=f"**依頼:** {prompt[:100]}\n\n**エラー:** {e}\n\n```\n{truncate(code)}\n```",
+            color=discord.Color.orange(),
+        )
+        embed.set_footer(text=f"実行者: {interaction.user}")
+        await interaction.followup.send(embed=embed)
+        return
+
+    # Step 3: Reply with success
+    code_preview = truncate(code) if len(code) > 800 else code
+    desc = f"**依頼:** {prompt[:100]}\n"
+    if explanation:
+        desc += f"**説明:** {explanation[:200]}\n"
+    desc += f"\n{target}\n🔗 {url}\n\n```\n{code_preview}\n```"
+
+    embed = discord.Embed(
+        title=f"✅ {final_filename} を作成しました",
+        description=desc,
+        color=discord.Color.green(),
+    )
+    embed.set_footer(text=f"model: {COPILOT_MODEL}  |  実行者: {interaction.user}")
+    await interaction.followup.send(embed=embed)
+
+
 # ── Health check HTTP server (for Koyeb Web Service health checks) ─────────────
 
 class _HealthHandler(BaseHTTPRequestHandler):
