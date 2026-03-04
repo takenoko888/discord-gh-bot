@@ -197,6 +197,177 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_issue",
+            "description": "GitHubリポジトリにIssueを作成する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ（例: takenoko888/discord-gh-bot）"},
+                    "title": {"type": "string", "description": "Issueのタイトル"},
+                    "body": {"type": "string", "description": "Issueの本文（Markdown可）", "default": ""},
+                    "labels": {"type": "array", "items": {"type": "string"}, "description": "ラベル名の配列", "default": []},
+                },
+                "required": ["repo", "title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_issues",
+            "description": "GitHubリポジトリのIssue一覧を取得する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ"},
+                    "state": {"type": "string", "enum": ["open", "closed", "all"], "description": "状態フィルタ", "default": "open"},
+                },
+                "required": ["repo"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "comment_issue",
+            "description": "IssueまたはPRにコメントを投稿する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ"},
+                    "issue_number": {"type": "integer", "description": "IssueまたはPRの番号"},
+                    "body": {"type": "string", "description": "コメント本文"},
+                },
+                "required": ["repo", "issue_number", "body"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_issue",
+            "description": "Issueをクローズする",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ"},
+                    "issue_number": {"type": "integer", "description": "Issue番号"},
+                },
+                "required": ["repo", "issue_number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_pr",
+            "description": "プルリクエストを作成する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ"},
+                    "title": {"type": "string", "description": "PRタイトル"},
+                    "body": {"type": "string", "description": "PR本文", "default": ""},
+                    "head": {"type": "string", "description": "マージ元ブランチ"},
+                    "base": {"type": "string", "description": "マージ先ブランチ", "default": "main"},
+                },
+                "required": ["repo", "title", "head"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_prs",
+            "description": "プルリクエスト一覧を取得する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ"},
+                    "state": {"type": "string", "enum": ["open", "closed", "all"], "description": "状態", "default": "open"},
+                },
+                "required": ["repo"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_pr_diff",
+            "description": "PRの差分（変更内容）を取得する。コードレビューに使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ"},
+                    "pr_number": {"type": "integer", "description": "PR番号"},
+                },
+                "required": ["repo", "pr_number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "merge_pr",
+            "description": "プルリクエストをマージする",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ"},
+                    "pr_number": {"type": "integer", "description": "PR番号"},
+                    "merge_method": {"type": "string", "enum": ["merge", "squash", "rebase"], "description": "マージ方法", "default": "merge"},
+                },
+                "required": ["repo", "pr_number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_branch",
+            "description": "新しいブランチを作成する",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ"},
+                    "branch_name": {"type": "string", "description": "新しいブランチ名"},
+                    "from_branch": {"type": "string", "description": "分岐元ブランチ", "default": "main"},
+                },
+                "required": ["repo", "branch_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "push_multiple_files",
+            "description": "複数ファイルを1つのコミットでリポジトリにpushする",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "リポジトリ"},
+                    "files": {
+                        "type": "array",
+                        "description": "ファイルの配列",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "ファイルパス"},
+                                "content": {"type": "string", "description": "ファイル内容"},
+                            },
+                            "required": ["path", "content"],
+                        },
+                    },
+                    "message": {"type": "string", "description": "コミットメッセージ"},
+                    "branch": {"type": "string", "description": "ブランチ名", "default": "main"},
+                },
+                "required": ["repo", "files", "message"],
+            },
+        },
+    },
 ]
 
 
@@ -398,6 +569,164 @@ async def tool_search_repo(query: str, repo: str) -> str:
             return "\n".join(lines)
 
 
+async def tool_create_issue(repo: str, title: str, body: str = "", labels: list[str] | None = None) -> str:
+    req_body: dict = {"title": title, "body": body}
+    if labels:
+        req_body["labels"] = labels
+    result = await _gh_api("POST", f"/repos/{repo}/issues", req_body)
+    if result["status"] == 201:
+        d = result["data"]
+        return f"✅ Issue #{d['number']} 作成: {d['html_url']}"
+    return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+
+
+async def tool_list_issues(repo: str, state: str = "open") -> str:
+    result = await _gh_api("GET", f"/repos/{repo}/issues?state={state}&per_page=15")
+    if result["status"] != 200:
+        return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+    items = result["data"]
+    if not items:
+        return f"Issue はありません（state={state}）"
+    lines = []
+    for i in items:
+        pr_tag = " [PR]" if i.get("pull_request") else ""
+        labels = " ".join(f"`{l['name']}`" for l in i.get("labels", []))
+        lines.append(f"#{i['number']} {i['title']}{pr_tag} {labels}")
+    return "\n".join(lines)
+
+
+async def tool_comment_issue(repo: str, issue_number: int, body: str) -> str:
+    result = await _gh_api("POST", f"/repos/{repo}/issues/{issue_number}/comments", {"body": body})
+    if result["status"] == 201:
+        return f"✅ #{issue_number} にコメント投稿: {result['data']['html_url']}"
+    return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+
+
+async def tool_close_issue(repo: str, issue_number: int) -> str:
+    headers = {"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json"}
+    async with aiohttp.ClientSession() as s:
+        async with s.patch(
+            f"{GITHUB_API}/repos/{repo}/issues/{issue_number}",
+            headers=headers, json={"state": "closed"}
+        ) as r:
+            data = await r.json()
+            if r.status == 200:
+                return f"✅ Issue #{issue_number} をクローズしました"
+            return f"エラー ({r.status}): {data.get('message', '')}"
+
+
+async def tool_create_pr(repo: str, title: str, head: str, base: str = "main", body: str = "") -> str:
+    req_body = {"title": title, "head": head, "base": base, "body": body}
+    result = await _gh_api("POST", f"/repos/{repo}/pulls", req_body)
+    if result["status"] == 201:
+        d = result["data"]
+        return f"✅ PR #{d['number']} 作成: {d['html_url']}"
+    return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+
+
+async def tool_list_prs(repo: str, state: str = "open") -> str:
+    result = await _gh_api("GET", f"/repos/{repo}/pulls?state={state}&per_page=15")
+    if result["status"] != 200:
+        return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+    items = result["data"]
+    if not items:
+        return f"PR はありません（state={state}）"
+    lines = []
+    for pr in items:
+        lines.append(f"#{pr['number']} {pr['title']} ({pr['head']['ref']} → {pr['base']['ref']})")
+    return "\n".join(lines)
+
+
+async def tool_get_pr_diff(repo: str, pr_number: int) -> str:
+    headers = {"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github.diff"}
+    async with aiohttp.ClientSession() as s:
+        async with s.get(f"{GITHUB_API}/repos/{repo}/pulls/{pr_number}", headers=headers) as r:
+            if r.status != 200:
+                return f"エラー ({r.status})"
+            diff = await r.text()
+            if len(diff) > 8000:
+                diff = diff[:8000] + "\n…(差分を8000文字に省略)"
+            return diff if diff else "(差分なし)"
+
+
+async def tool_merge_pr(repo: str, pr_number: int, merge_method: str = "merge") -> str:
+    result = await _gh_api("PUT", f"/repos/{repo}/pulls/{pr_number}/merge", {"merge_method": merge_method})
+    if result["status"] == 200:
+        return f"✅ PR #{pr_number} をマージしました"
+    return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+
+
+async def tool_create_branch(repo: str, branch_name: str, from_branch: str = "main") -> str:
+    ref_result = await _gh_api("GET", f"/repos/{repo}/git/ref/heads/{from_branch}")
+    if ref_result["status"] != 200:
+        return f"エラー: ブランチ '{from_branch}' が見つかりません"
+    sha = ref_result["data"]["object"]["sha"]
+    result = await _gh_api("POST", f"/repos/{repo}/git/refs", {"ref": f"refs/heads/{branch_name}", "sha": sha})
+    if result["status"] == 201:
+        return f"✅ ブランチ '{branch_name}' を作成しました（{from_branch} から分岐）"
+    return f"エラー ({result['status']}): {result['data'].get('message', '')}"
+
+
+async def tool_push_multiple_files(repo: str, files: list[dict], message: str, branch: str = "main") -> str:
+    """Push multiple files in a single commit using the Git Trees API."""
+    # 1. Get the latest commit SHA
+    ref_result = await _gh_api("GET", f"/repos/{repo}/git/ref/heads/{branch}")
+    if ref_result["status"] != 200:
+        return f"エラー: ブランチ '{branch}' が見つかりません"
+    latest_sha = ref_result["data"]["object"]["sha"]
+
+    # 2. Get the base tree
+    commit_result = await _gh_api("GET", f"/repos/{repo}/git/commits/{latest_sha}")
+    if commit_result["status"] != 200:
+        return f"エラー: コミット情報の取得に失敗"
+    base_tree_sha = commit_result["data"]["tree"]["sha"]
+
+    # 3. Create blobs for each file
+    tree_items = []
+    for f in files:
+        blob_result = await _gh_api("POST", f"/repos/{repo}/git/blobs", {
+            "content": f["content"], "encoding": "utf-8"
+        })
+        if blob_result["status"] != 201:
+            return f"エラー: {f['path']} の blob 作成に失敗"
+        tree_items.append({
+            "path": f["path"],
+            "mode": "100644",
+            "type": "blob",
+            "sha": blob_result["data"]["sha"],
+        })
+
+    # 4. Create new tree
+    tree_result = await _gh_api("POST", f"/repos/{repo}/git/trees", {
+        "base_tree": base_tree_sha, "tree": tree_items
+    })
+    if tree_result["status"] != 201:
+        return f"エラー: ツリーの作成に失敗"
+
+    # 5. Create commit
+    commit_body = {
+        "message": message,
+        "tree": tree_result["data"]["sha"],
+        "parents": [latest_sha],
+    }
+    new_commit = await _gh_api("POST", f"/repos/{repo}/git/commits", commit_body)
+    if new_commit["status"] != 201:
+        return f"エラー: コミットの作成に失敗"
+
+    # 6. Update branch ref
+    headers = {"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json"}
+    async with aiohttp.ClientSession() as s:
+        async with s.patch(
+            f"{GITHUB_API}/repos/{repo}/git/refs/heads/{branch}",
+            headers=headers, json={"sha": new_commit["data"]["sha"]}
+        ) as r:
+            if r.status != 200:
+                return f"エラー: ブランチの更新に失敗"
+
+    file_list = ", ".join(f["path"] for f in files)
+    return f"✅ {len(files)}ファイルを1コミットでpush: {file_list}\nhttps://github.com/{repo}"
+
+
 TOOL_DISPATCH = {
     "read_file": lambda p: tool_read_file(p["repo"], p.get("path", "")),
     "list_files": lambda p: tool_list_files(p["repo"], p.get("path", "")),
@@ -407,6 +736,16 @@ TOOL_DISPATCH = {
     "run_gh": lambda p: tool_run_gh(p["args"]),
     "run_git": lambda p: tool_run_git(p["args"]),
     "search_repo": lambda p: tool_search_repo(p["query"], p["repo"]),
+    "create_issue": lambda p: tool_create_issue(p["repo"], p["title"], p.get("body", ""), p.get("labels")),
+    "list_issues": lambda p: tool_list_issues(p["repo"], p.get("state", "open")),
+    "comment_issue": lambda p: tool_comment_issue(p["repo"], p["issue_number"], p["body"]),
+    "close_issue": lambda p: tool_close_issue(p["repo"], p["issue_number"]),
+    "create_pr": lambda p: tool_create_pr(p["repo"], p["title"], p["head"], p.get("base", "main"), p.get("body", "")),
+    "list_prs": lambda p: tool_list_prs(p["repo"], p.get("state", "open")),
+    "get_pr_diff": lambda p: tool_get_pr_diff(p["repo"], p["pr_number"]),
+    "merge_pr": lambda p: tool_merge_pr(p["repo"], p["pr_number"], p.get("merge_method", "merge")),
+    "create_branch": lambda p: tool_create_branch(p["repo"], p["branch_name"], p.get("from_branch", "main")),
+    "push_multiple_files": lambda p: tool_push_multiple_files(p["repo"], p["files"], p["message"], p.get("branch", "main")),
 }
 
 
