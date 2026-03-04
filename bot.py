@@ -13,11 +13,13 @@ Deploy: Koyeb (Worker or Web Service)
 """
 
 import os
+import json
 import asyncio
 import shlex
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import aiohttp
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
@@ -25,7 +27,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN: str = os.environ["DISCORD_TOKEN"]
+GH_TOKEN: str = os.environ.get("GH_TOKEN", "")
 ALLOWED_ROLE_NAME: str = os.environ.get("ALLOWED_ROLE_NAME", "gh-bot")
+COPILOT_MODEL: str = os.environ.get("COPILOT_MODEL", "gpt-4o")
 
 # Subcommands blocked for safety (e.g. would expose credentials)
 BLOCKED_SUBCOMMANDS = {"auth", "config"}
@@ -117,15 +121,42 @@ async def run_git(args: list[str]) -> tuple[str, int]:
     return stdout.decode("utf-8", errors="replace").strip(), proc.returncode
 
 
+MODELS_API_URL = "https://models.inference.ai.azure.com/chat/completions"
+
+
 async def run_copilot(prompt: str) -> tuple[str, int]:
-    """Execute `gh copilot -p "<prompt>" -s` and return (output, return-code)."""
-    proc = await asyncio.create_subprocess_exec(
-        "gh", "copilot", "-p", prompt, "-s",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=COPILOT_TIMEOUT)
-    return stdout.decode("utf-8", errors="replace").strip(), proc.returncode
+    """Call GitHub Models API directly (no gh copilot CLI needed)."""
+    if not GH_TOKEN:
+        return "GH_TOKEN が設定されていません。", 1
+
+    headers = {
+        "Authorization": f"Bearer {GH_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": COPILOT_MODEL,
+        "messages": [
+            {"role": "system", "content": "あなたは優秀なプログラミングアシスタントです。日本語で回答してください。"},
+            {"role": "user", "content": prompt},
+        ],
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                MODELS_API_URL, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=COPILOT_TIMEOUT)
+            ) as resp:
+                data = await resp.json()
+                if resp.status == 200:
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "(応答なし)")
+                    return content, 0
+                else:
+                    error_msg = data.get("error", {}).get("message", json.dumps(data, ensure_ascii=False))
+                    return f"API エラー ({resp.status}): {error_msg}", 1
+    except asyncio.TimeoutError:
+        return "タイムアウトしました。", 1
+    except Exception as e:
+        return f"リクエスト失敗: {e}", 1
 
 
 def validate_git_args(args: list[str]) -> tuple[bool, str]:
@@ -263,28 +294,17 @@ async def copilot_command(interaction: discord.Interaction, prompt: str):
         return
 
     await interaction.response.defer()
-    try:
-        output, returncode = await run_copilot(prompt.strip())
-    except asyncio.TimeoutError:
-        await interaction.followup.send(f"❌ Copilot がタイムアウトしました（{COPILOT_TIMEOUT}秒）。")
-        return
-    except FileNotFoundError:
-        await interaction.followup.send(
-            "❌ `gh` コマンドが見つかりません。GitHub CLI をインストールしてください。"
-        )
-        return
-    except Exception as e:
-        await interaction.followup.send(f"❌ 予期しないエラー: {e}")
-        return
+    output, returncode = await run_copilot(prompt.strip())
 
+    success = returncode == 0
     display_output = truncate(output) if output else "(応答なし)"
 
     embed = discord.Embed(
-        title="🤖 Copilot",
-        description=f"**Q:** {prompt[:100]}{'…' if len(prompt) > 100 else ''}\n\n```\n{display_output}\n```",
-        color=discord.Color.blue(),
+        title="🤖 Copilot" if success else "❌ Copilot",
+        description=f"**Q:** {prompt[:100]}{'…' if len(prompt) > 100 else ''}\n\n{display_output}",
+        color=discord.Color.blue() if success else discord.Color.red(),
     )
-    embed.set_footer(text=f"実行者: {interaction.user}")
+    embed.set_footer(text=f"model: {COPILOT_MODEL}  |  実行者: {interaction.user}")
     await interaction.followup.send(embed=embed)
 
 
