@@ -13,11 +13,16 @@ GOOGLE_API_KEY: str = os.environ.get("GOOGLE_API_KEY", "")
 GOOGLE_CSE_ID: str = os.environ.get("GOOGLE_CSE_ID", "")
 
 AVAILABLE_MODELS = [
-    "gpt-4o", "GPT-5.3-Codex", "Gemini 3 Pro (Preview)",
-    "claude sonnet 4.6", "claude haiku 4.5",
-    "Claude Opus 4.6",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "openai/gpt-4.1",
+    "anthropic/claude-sonnet-4-5",
+    "anthropic/claude-3-7-sonnet",
+    "anthropic/claude-3-5-sonnet",
+    "anthropic/claude-3-5-haiku",
+    "mistral-ai/mistral-large-2411",
 ]
-DEFAULT_MODEL = os.environ.get("COPILOT_MODEL", "gpt-4o")
+DEFAULT_MODEL = os.environ.get("COPILOT_MODEL", "openai/gpt-4o")
 
 BLOCKED_SUBCOMMANDS = {"auth", "config"}
 BLOCKED_GIT_PATTERNS = [
@@ -33,7 +38,7 @@ GH_TIMEOUT = 30
 GIT_TIMEOUT = 60
 AGENT_TIMEOUT = 120
 MAX_TOOL_ROUNDS = 10
-MODELS_API_URL = "https://models.inference.ai.azure.com/chat/completions"
+MODELS_API_URL = "https://models.github.ai/inference/chat/completions"
 GITHUB_API = "https://api.github.com"
 
 SYSTEM_PROMPT = """\

@@ -191,6 +191,44 @@ async def remind_command(interaction: discord.Interaction, minutes: int, message
 
 
 
+@client.tree.command(name="models", description="利用可能なAIモデル一覧をGitHub Modelsカタログから取得して表示")
+async def models_command(interaction: discord.Interaction):
+    await interaction.response.defer()
+    import aiohttp
+    from config import GH_TOKEN
+    catalog_url = "https://models.github.ai/catalog/models"
+    headers = {
+        "Authorization": f"Bearer {GH_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(catalog_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    await interaction.followup.send(f"❌ カタログ取得失敗 ({resp.status})")
+                    return
+                models = await resp.json()
+    except Exception as e:
+        await interaction.followup.send(f"❌ エラー: {e}")
+        return
+
+    lines = ["## 🤖 利用可能なモデル一覧\n"]
+    for m in models:
+        mid = m.get("id", "")
+        name = m.get("name", "")
+        tier = m.get("rate_limit_tier", "")
+        lines.append(f"**`{mid}`** — {name} ({tier})")
+
+    text = "\n".join(lines)
+    if len(text) > 3900:
+        text = text[:3900] + "\n…(省略)"
+    embed = discord.Embed(description=text, color=discord.Color.blurple())
+    embed.set_footer(text="モデル変更: /model <ID>")
+    await interaction.followup.send(embed=embed)
+
+
+@client.tree.command(name="help", description="コマンド一覧を表示")
 async def help_command(interaction: discord.Interaction):
     await interaction.response.defer()
     lines = [
@@ -213,6 +251,8 @@ async def help_command(interaction: discord.Interaction):
         "**`/remind <分> <内容>`**",
         "　指定した分数後にメンションで通知します。",
         "　例: `30 PRのレビューをする`\n",
+        "**`/models`**",
+        "　利用可能なAIモデル一覧を表示します。\n",
         "**`/help`**",
         "　このコマンド一覧を表示します。",
     ]
