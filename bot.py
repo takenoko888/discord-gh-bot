@@ -1,9 +1,11 @@
 """
-Discord Bot that executes gh (GitHub CLI) commands.
+Discord Bot that executes gh, git, and gh copilot commands.
 Only members with the allowed role can run commands.
 
 Usage:
-  /gh <command>  — e.g. /gh repo list --limit 5
+  /gh <command>      — e.g. /gh repo list --limit 5
+  /git <command>     — e.g. /git push origin main
+  /copilot <prompt>  — e.g. /copilot PythonでHello Worldを書いて
 
 Deploy: Koyeb (Worker or Web Service)
   - Set DISCORD_TOKEN, ALLOWED_ROLE_NAME, GH_TOKEN in Koyeb env vars
@@ -28,7 +30,17 @@ ALLOWED_ROLE_NAME: str = os.environ.get("ALLOWED_ROLE_NAME", "gh-bot")
 # Subcommands blocked for safety (e.g. would expose credentials)
 BLOCKED_SUBCOMMANDS = {"auth", "config"}
 
+# Git: block dangerous operations (reset --hard, push --force, clean -fd)
+BLOCKED_GIT_PATTERNS = [
+    lambda args: args[0] == "reset" and "--hard" in args,
+    lambda args: args[0] == "push" and ("--force" in args or "-f" in args),
+    lambda args: args[0] == "clean" and ("-fd" in args or ("-f" in args and "-d" in args)),
+]
+
 MAX_OUTPUT_LENGTH = 1900  # Discord message hard-limit is 2000
+GH_TIMEOUT = 30
+GIT_TIMEOUT = 60
+COPILOT_TIMEOUT = 90  # Copilot can take a while
 
 
 # ── Bot setup ──────────────────────────────────────────────────────────────────
@@ -73,8 +85,40 @@ async def run_gh(args: list[str]) -> tuple[str, int]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=GH_TIMEOUT)
     return stdout.decode("utf-8", errors="replace").strip(), proc.returncode
+
+
+async def run_git(args: list[str]) -> tuple[str, int]:
+    """Execute `git <args>` and return (stdout+stderr combined, return-code)."""
+    proc = await asyncio.create_subprocess_exec(
+        "git", *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=os.environ.get("GIT_WORK_DIR", "."),
+    )
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=GIT_TIMEOUT)
+    return stdout.decode("utf-8", errors="replace").strip(), proc.returncode
+
+
+async def run_copilot(prompt: str) -> tuple[str, int]:
+    """Execute `gh copilot -p "<prompt>" -s` and return (output, return-code)."""
+    proc = await asyncio.create_subprocess_exec(
+        "gh", "copilot", "-p", prompt, "-s",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=COPILOT_TIMEOUT)
+    return stdout.decode("utf-8", errors="replace").strip(), proc.returncode
+
+
+def validate_git_args(args: list[str]) -> tuple[bool, str]:
+    if not args:
+        return False, "コマンドが空です。"
+    for pred in BLOCKED_GIT_PATTERNS:
+        if pred(args):
+            return False, f"`git {' '.join(args)}` は安全のため禁止されています。"
+    return True, ""
 
 
 def truncate(text: str) -> str:
@@ -114,7 +158,7 @@ async def gh_command(interaction: discord.Interaction, command: str):
     try:
         output, returncode = await run_gh(args)
     except asyncio.TimeoutError:
-        await interaction.followup.send("❌ コマンドがタイムアウトしました（30秒）。")
+        await interaction.followup.send(f"❌ コマンドがタイムアウトしました（{GH_TIMEOUT}秒）。")
         return
     except FileNotFoundError:
         await interaction.followup.send(
@@ -136,6 +180,92 @@ async def gh_command(interaction: discord.Interaction, command: str):
         color=discord.Color.green() if success else discord.Color.red(),
     )
     embed.set_footer(text=f"終了コード: {returncode}  |  実行者: {interaction.user}")
+    await interaction.followup.send(embed=embed)
+
+
+@client.tree.command(name="git", description="git コマンドを実行します（例: push origin main）")
+@app_commands.describe(command="git に渡す引数（例: push origin main）")
+async def git_command(interaction: discord.Interaction, command: str):
+    if not has_allowed_role(interaction):
+        await interaction.response.send_message(
+            f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        args = shlex.split(command)
+    except ValueError as e:
+        await interaction.response.send_message(f"❌ コマンドの解析失敗: {e}", ephemeral=True)
+        return
+
+    ok, reason = validate_git_args(args)
+    if not ok:
+        await interaction.response.send_message(f"❌ {reason}", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+    try:
+        output, returncode = await run_git(args)
+    except asyncio.TimeoutError:
+        await interaction.followup.send(f"❌ コマンドがタイムアウトしました（{GIT_TIMEOUT}秒）。")
+        return
+    except FileNotFoundError:
+        await interaction.followup.send("❌ `git` コマンドが見つかりません。")
+        return
+    except Exception as e:
+        await interaction.followup.send(f"❌ 予期しないエラー: {e}")
+        return
+
+    success = returncode == 0
+    display_output = truncate(output) if output else "(出力なし)"
+
+    embed = discord.Embed(
+        title=f"{'✅' if success else '❌'}  git {command}",
+        description=f"```\n{display_output}\n```",
+        color=discord.Color.green() if success else discord.Color.red(),
+    )
+    embed.set_footer(text=f"終了コード: {returncode}  |  実行者: {interaction.user}")
+    await interaction.followup.send(embed=embed)
+
+
+@client.tree.command(name="copilot", description="GitHub Copilot に質問します（AIと会話・コード生成）")
+@app_commands.describe(prompt="質問や依頼（例: PythonでHello Worldを書いて）")
+async def copilot_command(interaction: discord.Interaction, prompt: str):
+    if not has_allowed_role(interaction):
+        await interaction.response.send_message(
+            f"❌ このコマンドを実行するには **{ALLOWED_ROLE_NAME}** ロールが必要です。",
+            ephemeral=True,
+        )
+        return
+
+    if not prompt.strip():
+        await interaction.response.send_message("❌ 質問を入力してください。", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+    try:
+        output, returncode = await run_copilot(prompt.strip())
+    except asyncio.TimeoutError:
+        await interaction.followup.send(f"❌ Copilot がタイムアウトしました（{COPILOT_TIMEOUT}秒）。")
+        return
+    except FileNotFoundError:
+        await interaction.followup.send(
+            "❌ `gh` コマンドが見つかりません。GitHub CLI をインストールしてください。"
+        )
+        return
+    except Exception as e:
+        await interaction.followup.send(f"❌ 予期しないエラー: {e}")
+        return
+
+    display_output = truncate(output) if output else "(応答なし)"
+
+    embed = discord.Embed(
+        title="🤖 Copilot",
+        description=f"**Q:** {prompt[:100]}{'…' if len(prompt) > 100 else ''}\n\n```\n{display_output}\n```",
+        color=discord.Color.blue(),
+    )
+    embed.set_footer(text=f"実行者: {interaction.user}")
     await interaction.followup.send(embed=embed)
 
 

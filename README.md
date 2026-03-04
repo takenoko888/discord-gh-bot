@@ -6,9 +6,12 @@ Discord上で `gh` (GitHub CLI) コマンドを実行できるスラッシュコ
 ## 機能
 
 - `/gh <引数>` — GitHub CLI コマンドを実行して結果をEmbedで返す
+- `/git <引数>` — git コマンドを実行（push, commit, clone など）
+- `/copilot <質問>` — GitHub Copilot に質問（AIと会話・コード生成）
 - ロールベースの権限管理（`gh-bot` ロールのみ実行可）
 - `gh auth` / `gh config` は安全のためブロック
-- 30秒タイムアウト・長い出力は自動省略
+- `git reset --hard` / `git push --force` / `git clean -fd` は安全のためブロック
+- タイムアウト・長い出力は自動省略
 - ヘルスチェック用HTTPサーバー内蔵（ポート `8000`）
 
 ---
@@ -108,11 +111,21 @@ GitHub CLIの認証は `GH_TOKEN` 環境変数で行います（`gh auth login` 
 ## 使い方
 
 ```
+# GitHub CLI
 /gh repo list --limit 5
 /gh issue list --repo owner/repo
 /gh pr list --state open
 /gh run list --limit 3
 /gh release list --repo owner/repo
+
+# git
+/git status
+/git push origin main
+/git clone https://github.com/owner/repo.git
+
+# Copilot（AI）
+/copilot PythonでHello Worldを書いて
+/copilot このエラーの原因を教えて
 ```
 
 ---
@@ -125,3 +138,6 @@ GitHub CLIの認証は `GH_TOKEN` 環境変数で行います（`gh auth login` 
 | `GH_TOKEN` | GitHub Personal Access Token（Koyeb用） | (Koyebでは必須) |
 | `ALLOWED_ROLE_NAME` | 実行を許可するロール名 | `gh-bot` |
 | `PORT` | ヘルスチェックサーバーのポート | `8000` |
+| `GIT_WORK_DIR` | `/git` コマンドの作業ディレクトリ | `.`（カレント） |
+
+> **注意**: `/copilot` は GitHub Copilot のサブスクリプションが必要です。`/git` で push 等を行う場合、Koyeb ではコンテナ再起動でファイルが消えるため、永続化にはボリュームの設定を検討してください。
