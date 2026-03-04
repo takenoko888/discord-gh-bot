@@ -58,11 +58,18 @@ class GhBot(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()
-        print("Slash commands synced.")
+        print("Global slash commands synced.")
 
     async def on_ready(self):
+        # Sync commands per-guild for instant availability
+        for guild in self.guilds:
+            try:
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                print(f"Guild commands synced: {guild.name} ({guild.id})")
+            except Exception as e:
+                print(f"Failed to sync guild {guild.name}: {e}")
         print(f"Logged in as {self.user}  (ID: {self.user.id})")
-
 
 client = GhBot()
 
