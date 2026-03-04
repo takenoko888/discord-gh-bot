@@ -16,6 +16,7 @@ AVAILABLE_MODELS = [
     "openai/gpt-4o",
     "openai/gpt-4o-mini",
     "openai/gpt-4.1",
+    "openai/gpt-5",
     "anthropic/claude-3-7-sonnet",
     "anthropic/claude-3-5-sonnet",
     "anthropic/claude-3-5-haiku",
