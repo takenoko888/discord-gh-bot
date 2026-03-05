@@ -28,4 +28,10 @@ echo "=== Starting bot ==="
 # Ensure token is available under all names the copilot binary checks
 export GITHUB_TOKEN="${GITHUB_TOKEN:-$GH_TOKEN}"
 export COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN:-$GH_TOKEN}"
-exec python bot.py
+
+while true; do
+    python bot.py
+    EXIT_CODE=$?
+    echo "[$(date)] Bot exited with code $EXIT_CODE. Restarting in 5s..."
+    sleep 5
+done

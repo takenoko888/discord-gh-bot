@@ -61,6 +61,15 @@ client = GhBot()
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+async def safe_defer(interaction: discord.Interaction) -> bool:
+    """Defer the interaction. Returns False if the interaction has already expired."""
+    try:
+        await interaction.response.defer()
+        return True
+    except (discord.NotFound, discord.HTTPException):
+        return False
+
+
 async def has_allowed_role(interaction: discord.Interaction) -> tuple[bool, str]:
     member = interaction.user if isinstance(interaction.user, discord.Member) else interaction.member
     if member is None and interaction.guild is not None:
@@ -90,7 +99,8 @@ def truncate(text: str, limit: int = MAX_OUTPUT_LENGTH) -> str:
 @client.tree.command(name="copilot", description="AIエージェント — 指示1つで自動実行（GitHub読み書き・コード生成・push）")
 @app_commands.describe(prompt="指示（例: takenoko888/discord-gh-botのbot.pyを読んで改善してpushして）")
 async def copilot_command(interaction: discord.Interaction, prompt: str):
-    await interaction.response.defer()
+    if not await safe_defer(interaction):
+        return
     if not await check_role(interaction):
         return
 
@@ -122,7 +132,8 @@ async def copilot_command(interaction: discord.Interaction, prompt: str):
 @client.tree.command(name="gh", description="gh コマンドを直接実行")
 @app_commands.describe(command="引数（例: repo list --limit 5）")
 async def gh_command(interaction: discord.Interaction, command: str):
-    await interaction.response.defer()
+    if not await safe_defer(interaction):
+        return
     if not await check_role(interaction):
         return
     output = await tool_run_gh(command)
@@ -137,7 +148,8 @@ async def gh_command(interaction: discord.Interaction, command: str):
 @client.tree.command(name="git", description="git コマンドを直接実行")
 @app_commands.describe(command="引数（例: status）")
 async def git_command(interaction: discord.Interaction, command: str):
-    await interaction.response.defer()
+    if not await safe_defer(interaction):
+        return
     if not await check_role(interaction):
         return
     output = await tool_run_git(command)
@@ -153,7 +165,8 @@ async def git_command(interaction: discord.Interaction, command: str):
 @app_commands.describe(name="モデル名")
 @app_commands.choices(name=[app_commands.Choice(name=m, value=m) for m in AVAILABLE_MODELS])
 async def model_command(interaction: discord.Interaction, name: app_commands.Choice[str]):
-    await interaction.response.defer()
+    if not await safe_defer(interaction):
+        return
     if not await check_role(interaction):
         return
     ch = interaction.channel_id
@@ -164,7 +177,8 @@ async def model_command(interaction: discord.Interaction, name: app_commands.Cho
 
 @client.tree.command(name="reset", description="会話履歴をリセット")
 async def reset_command(interaction: discord.Interaction):
-    await interaction.response.defer()
+    if not await safe_defer(interaction):
+        return
     if not await check_role(interaction):
         return
     store.clear(interaction.channel_id)
@@ -174,7 +188,8 @@ async def reset_command(interaction: discord.Interaction):
 @client.tree.command(name="remind", description="指定分後にメンションで通知")
 @app_commands.describe(minutes="何分後に通知するか", message="通知内容（例: PRのレビューをする）")
 async def remind_command(interaction: discord.Interaction, minutes: int, message: str):
-    await interaction.response.defer()
+    if not await safe_defer(interaction):
+        return
     if minutes <= 0:
         await interaction.followup.send("❌ 1分以上で指定してください。")
         return
@@ -193,7 +208,8 @@ async def remind_command(interaction: discord.Interaction, minutes: int, message
 
 @client.tree.command(name="models", description="利用可能なAIモデル一覧をGitHub Modelsカタログから取得して表示")
 async def models_command(interaction: discord.Interaction):
-    await interaction.response.defer()
+    if not await safe_defer(interaction):
+        return
     import aiohttp
     from config import GH_TOKEN
     catalog_url = "https://models.github.ai/catalog/models"
@@ -230,7 +246,8 @@ async def models_command(interaction: discord.Interaction):
 
 @client.tree.command(name="help", description="コマンド一覧を表示")
 async def help_command(interaction: discord.Interaction):
-    await interaction.response.defer()
+    if not await safe_defer(interaction):
+        return
     lines = [
         "## 🤖 GitHub Copilot Bot — コマンド一覧\n",
         "**`/copilot <指示>`**",
@@ -265,7 +282,8 @@ async def help_command(interaction: discord.Interaction):
 
 @client.tree.command(name="history", description="会話状態を表示")
 async def history_command(interaction: discord.Interaction):
-    await interaction.response.defer()
+    if not await safe_defer(interaction):
+        return
     ch = interaction.channel_id
     msgs = store._history.get(ch, [])
     model = store.get_model(ch)
