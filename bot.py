@@ -18,6 +18,7 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import aiohttp
 import discord
 from discord import app_commands
 
@@ -43,6 +44,7 @@ class GhBot(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()
+        self.loop.create_task(_keep_alive_loop())
 
     async def on_ready(self):
         for guild in self.guilds:
@@ -53,6 +55,22 @@ class GhBot(discord.Client):
             except Exception as e:
                 print(f"Sync failed {guild.name}: {e}")
         print(f"Logged in as {self.user}")
+
+
+async def _keep_alive_loop():
+    """Ping the bot's own external URL every 10 minutes to prevent Render from sleeping."""
+    await asyncio.sleep(60)  # wait for full startup
+    url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not url:
+        return
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    print(f"[keep-alive] ping {url} → {resp.status}")
+        except Exception as e:
+            print(f"[keep-alive] error: {e}")
+        await asyncio.sleep(600)  # every 10 minutes
 
 
 client = GhBot()
@@ -210,7 +228,6 @@ async def remind_command(interaction: discord.Interaction, minutes: int, message
 async def models_command(interaction: discord.Interaction):
     if not await safe_defer(interaction):
         return
-    import aiohttp
     from config import GH_TOKEN
     catalog_url = "https://models.github.ai/catalog/models"
     headers = {

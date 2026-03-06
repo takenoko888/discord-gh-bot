@@ -1,1 +1,1 @@
-web: python bot.py
+web: bash entrypoint.sh
