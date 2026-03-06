@@ -58,19 +58,35 @@ class GhBot(discord.Client):
 
 
 async def _keep_alive_loop():
-    """Ping the bot's own external URL every 10 minutes to prevent Render from sleeping."""
-    await asyncio.sleep(60)  # wait for full startup
-    url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    """Ping the bot's own external URL every 5 minutes to prevent Koyeb/Render from sleeping."""
+    await asyncio.sleep(30)  # wait for full startup
+    # Support both Koyeb (SERVICE_URL) and Render (RENDER_EXTERNAL_URL)
+    url = (
+        os.environ.get("SERVICE_URL")
+        or os.environ.get("RENDER_EXTERNAL_URL")
+        or ""
+    ).rstrip("/")
     if not url:
-        return
+        print("[keep-alive] SERVICE_URL not set — set it in Koyeb environment variables to prevent sleeping.")
+    port = int(os.environ.get("PORT", 8000))
+    local_url = f"http://127.0.0.1:{port}"
     while True:
+        # Always ping localhost to keep the HTTP server warm
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    print(f"[keep-alive] ping {url} → {resp.status}")
-        except Exception as e:
-            print(f"[keep-alive] error: {e}")
-        await asyncio.sleep(600)  # every 10 minutes
+                async with session.get(local_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    pass
+        except Exception:
+            pass
+        # Ping the external URL if configured (prevents Koyeb from sleeping)
+        if url:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        print(f"[keep-alive] ping {url} → {resp.status}")
+            except Exception as e:
+                print(f"[keep-alive] error: {e}")
+        await asyncio.sleep(300)  # every 5 minutes
 
 
 client = GhBot()
