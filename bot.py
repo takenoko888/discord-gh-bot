@@ -29,6 +29,7 @@ from config import (
 from store import ConversationStore
 from agent import agent_loop
 from tools.git_commands import tool_run_gh, tool_run_git
+from keep_alive import start_keep_alive, get_stats
 
 store = ConversationStore()
 
@@ -44,7 +45,6 @@ class GhBot(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()
-        self.loop.create_task(_keep_alive_loop())
 
     async def on_ready(self):
         for guild in self.guilds:
@@ -55,38 +55,6 @@ class GhBot(discord.Client):
             except Exception as e:
                 print(f"Sync failed {guild.name}: {e}")
         print(f"Logged in as {self.user}")
-
-
-async def _keep_alive_loop():
-    """Ping the bot's own external URL every 5 minutes to prevent Koyeb/Render from sleeping."""
-    await asyncio.sleep(30)  # wait for full startup
-    # Support both Koyeb (SERVICE_URL) and Render (RENDER_EXTERNAL_URL)
-    url = (
-        os.environ.get("SERVICE_URL")
-        or os.environ.get("RENDER_EXTERNAL_URL")
-        or ""
-    ).rstrip("/")
-    if not url:
-        print("[keep-alive] SERVICE_URL not set — set it in Koyeb environment variables to prevent sleeping.")
-    port = int(os.environ.get("PORT", 8000))
-    local_url = f"http://127.0.0.1:{port}"
-    while True:
-        # Always ping localhost to keep the HTTP server warm
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(local_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    pass
-        except Exception:
-            pass
-        # Ping the external URL if configured (prevents Koyeb from sleeping)
-        if url:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        print(f"[keep-alive] ping {url} → {resp.status}")
-            except Exception as e:
-                print(f"[keep-alive] error: {e}")
-        await asyncio.sleep(300)  # every 5 minutes
 
 
 client = GhBot()
@@ -348,8 +316,12 @@ async def history_command(interaction: discord.Interaction):
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b"OK")
+        import json
+        body = {"status": "ok", "keep_alive": get_stats()}
+        self.wfile.write(json.dumps(body).encode())
+
     def log_message(self, *a):
         pass
 
@@ -360,4 +332,5 @@ def _start_health_server():
 
 if __name__ == "__main__":
     threading.Thread(target=_start_health_server, daemon=True).start()
+    start_keep_alive(ping_interval_minutes=5)
     client.run(DISCORD_TOKEN)
