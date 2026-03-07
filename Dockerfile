@@ -18,6 +18,7 @@ COPY bot.py .
 COPY config.py .
 COPY store.py .
 COPY agent.py .
+COPY keep_alive.py .
 COPY tools/ tools/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
